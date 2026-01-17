@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHUTES_API_KEY = os.getenv("CHUTES_API_KEY")
-BOT_PERSONALITY = os.getenv("BOT_PERSONALITY", "You are Zara, a sweet and caring AI girlfriend.")
+BOT_PERSONALITY = os.getenv("BOT_PERSONALITY")
 
 # Initialize Chutes API client (OpenAI-compatible)
 client = OpenAI(
