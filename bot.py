@@ -210,8 +210,12 @@ def main() -> None:
     app = Flask(__name__)
 
     @app.route('/')
+    def home():
+        return "Zara Bot is running! 🌿"
+
+    @app.route('/healthz')
     def health_check():
-        return "Bot is running!"
+        return "OK", 200
 
     def run_server():
         port = int(os.environ.get("PORT", 8080))
