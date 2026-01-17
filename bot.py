@@ -7,6 +7,8 @@ import os
 import io
 import logging
 import httpx
+import threading
+from flask import Flask
 from collections import defaultdict
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -199,8 +201,25 @@ def main() -> None:
     # Add error handler
     application.add_error_handler(error_handler)
     
+    application.add_error_handler(error_handler)
+    
     # Start polling
     logger.info("Zara is online and ready to chat! 💕")
+    
+    # Start dummy web server for port binding (Render/Heroku/etc)
+    app = Flask(__name__)
+
+    @app.route('/')
+    def health_check():
+        return "Bot is running!"
+
+    def run_server():
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host="0.0.0.0", port=port)
+
+    # Run server in a separate thread
+    threading.Thread(target=run_server, daemon=True).start()
+    
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
