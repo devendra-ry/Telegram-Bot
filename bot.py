@@ -4,7 +4,9 @@ Using Chutes API for AI responses with conversation memory
 """
 
 import os
+import io
 import logging
+import httpx
 from collections import defaultdict
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -24,7 +26,6 @@ logger = logging.getLogger(__name__)
 # Configuration
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHUTES_API_KEY = os.getenv("CHUTES_API_KEY")
-BOT_PERSONALITY = os.getenv("BOT_PERSONALITY")
 
 # Initialize Chutes API client (OpenAI-compatible)
 client = OpenAI(
@@ -52,10 +53,8 @@ def get_ai_response(chat_id: int, user_message: str) -> str:
     if len(conversation_history[chat_id]) > MAX_HISTORY:
         conversation_history[chat_id] = conversation_history[chat_id][-MAX_HISTORY:]
     
-    # Build messages with system prompt
-    messages = [
-        {"role": "system", "content": BOT_PERSONALITY}
-    ] + conversation_history[chat_id]
+    # Build messages (no system prompt)
+    messages = conversation_history[chat_id]
     
     try:
         response = client.chat.completions.create(
@@ -102,6 +101,66 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text("I've cleared our conversation history. 🌿 Whenever you're ready, I'm here to listen.")
 
 
+async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /generate command for image generation."""
+    chat_id = update.effective_chat.id
+    
+    # Get the prompt from command arguments
+    if not context.args:
+        await update.message.reply_text(
+            "✨ To generate an image, use:\n"
+            "`/generate <your prompt>`\n\n"
+            "Example: `/generate a serene sunset over mountains`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    prompt = " ".join(context.args)
+    
+    # Show upload photo action
+    await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+    await update.message.reply_text(f"🎨 Creating your image: *{prompt}*\n\nThis may take a moment...", parse_mode="Markdown")
+    
+    try:
+        # Call Chutes Image API (Z-Image Turbo)
+        async with httpx.AsyncClient(timeout=120.0) as http_client:
+            response = await http_client.post(
+                "https://chutes-z-image-turbo.chutes.ai/generate",
+                headers={
+                    "Authorization": f"Bearer {CHUTES_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "prompt": prompt
+                }
+            )
+            
+            if response.status_code == 200:
+                # Send the generated image
+                image_data = io.BytesIO(response.content)
+                image_data.name = "generated_image.png"
+                await update.message.reply_photo(
+                    photo=image_data,
+                    caption=f"✨ *{prompt}*",
+                    parse_mode="Markdown"
+                )
+            else:
+                logger.error(f"Image generation failed: {response.status_code} - {response.text}")
+                await update.message.reply_text(
+                    "😔 I couldn't generate that image right now. Please try again with a different prompt."
+                )
+                
+    except httpx.TimeoutException:
+        await update.message.reply_text(
+            "⏳ The image is taking too long to generate. Please try a simpler prompt."
+        )
+    except Exception as e:
+        logger.error(f"Image generation error: {e}")
+        await update.message.reply_text(
+            "😔 Something went wrong while generating your image. Please try again later."
+        )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming text messages."""
     chat_id = update.effective_chat.id
@@ -134,6 +193,7 @@ def main() -> None:
     # Add handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("clear", clear_command))
+    application.add_handler(CommandHandler("generate", generate_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Add error handler
