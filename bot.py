@@ -62,7 +62,7 @@ def get_ai_response(chat_id: int, user_message: str) -> str:
         response = client.chat.completions.create(
             model="moonshotai/Kimi-K2-Thinking-TEE",
             messages=messages,
-            max_tokens=500,
+            max_tokens=1024,
             temperature=0.8
         )
         
