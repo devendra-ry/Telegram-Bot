@@ -36,7 +36,7 @@ client = OpenAI(
 conversation_history = defaultdict(list)
 
 # Maximum messages to keep in history (to avoid token limits)
-MAX_HISTORY = 20
+MAX_HISTORY = 40
 
 
 def get_ai_response(chat_id: int, user_message: str) -> str:
