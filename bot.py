@@ -59,7 +59,7 @@ def get_ai_response(chat_id: int, user_message: str) -> str:
     
     try:
         response = client.chat.completions.create(
-            model="deepseek-ai/DeepSeek-V3-0324",
+            model="moonshotai/Kimi-K2-Thinking-TEE",
             messages=messages,
             max_tokens=500,
             temperature=0.8
