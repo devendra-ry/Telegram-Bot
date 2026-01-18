@@ -197,12 +197,19 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     "Content-Type": "application/json"
                 },
                 json={
-                    "prompt": prompt,
+                    "loras": [None],
                     "width": 768,
                     "height": 512,
+                    "images": [None],
+                    "prompt": prompt,
+                    "pipeline": None,
+                    "image_url": None,
+                    "video_b64": None,
+                    "video_url": None,
                     "frame_rate": 25,
                     "num_frames": 121,
                     "enhance_prompt": True,
+                    "image_frame_index": 0,
                     "num_inference_steps": 40
                 }
             )
@@ -286,25 +293,41 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(f"🎬 Animating your image: *{prompt}*\n\n⏳ This may take 1-2 minutes...", parse_mode="Markdown")
     
     try:
+        # Get raw base64 image (without data URI prefix)
+        image_b64 = user_images[chat_id]
+        # Remove data URI prefix if present
+        if image_b64.startswith("data:"):
+            image_b64 = image_b64.split(",", 1)[1]
+        
         # Call Chutes LTX-2 Video API with image
         async with httpx.AsyncClient(timeout=300.0) as http_client:
+            # Include ALL parameters from API spec
+            request_body = {
+                "loras": [None],
+                "width": 768,
+                "height": 512,
+                "images": [image_b64],
+                "prompt": prompt,
+                "pipeline": None,
+                "image_url": None,
+                "video_b64": None,
+                "video_url": None,
+                "frame_rate": 25,
+                "num_frames": 121,
+                "enhance_prompt": False,
+                "image_frame_index": 0,
+                "num_inference_steps": 40
+            }
+            
+            logger.info(f"Animate request (image length: {len(image_b64)} chars)")
+            
             response = await http_client.post(
                 "https://chutes-ltx-2.chutes.ai/generate",
                 headers={
                     "Authorization": f"Bearer {CHUTES_API_KEY}",
                     "Content-Type": "application/json"
                 },
-                json={
-                    "prompt": prompt,
-                    "images": [user_images[chat_id]],
-                    "width": 768,
-                    "height": 512,
-                    "frame_rate": 25,
-                    "num_frames": 121,
-                    "enhance_prompt": True,
-                    "image_frame_index": 0,
-                    "num_inference_steps": 40
-                }
+                json=request_body
             )
             
             if response.status_code == 200:
@@ -348,9 +371,10 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         parse_mode="Markdown"
                     )
             else:
-                logger.error(f"Animation failed: {response.status_code} - {response.text}")
+                error_text = response.text[:500] if len(response.text) > 500 else response.text
+                logger.error(f"Animation failed: {response.status_code} - {error_text}")
                 await update.message.reply_text(
-                    f"😔 Animation failed. Error: {response.status_code}"
+                    f"😔 Animation failed. Error: {response.status_code}\n{error_text[:200]}"
                 )
                 
     except httpx.TimeoutException:
