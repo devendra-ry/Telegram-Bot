@@ -188,31 +188,29 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(f"🎬 Generating video: *{prompt}*\n\n⏳ This may take 1-2 minutes...", parse_mode="Markdown")
     
     try:
-        # Call Chutes LTX-2 Video API
+        # Call Chutes LTX-2 Video API - minimal required params only
         async with httpx.AsyncClient(timeout=300.0) as http_client:
+            request_body = {
+                "prompt": prompt,
+                "width": 768,
+                "height": 512,
+                "frame_rate": 25,
+                "num_frames": 97,
+                "num_inference_steps": 30
+            }
+            
+            logger.info(f"Video request body: {request_body}")
+            
             response = await http_client.post(
                 "https://chutes-ltx-2.chutes.ai/generate",
                 headers={
                     "Authorization": f"Bearer {CHUTES_API_KEY}",
                     "Content-Type": "application/json"
                 },
-                json={
-                    "loras": [None],
-                    "width": 768,
-                    "height": 512,
-                    "images": [None],
-                    "prompt": prompt,
-                    "pipeline": None,
-                    "image_url": None,
-                    "video_b64": None,
-                    "video_url": None,
-                    "frame_rate": 25,
-                    "num_frames": 121,
-                    "enhance_prompt": True,
-                    "image_frame_index": 0,
-                    "num_inference_steps": 40
-                }
+                json=request_body
             )
+            
+            logger.info(f"Video response status: {response.status_code}")
             
             if response.status_code == 200:
                 # Try to parse as JSON (might contain base64 video)
@@ -301,22 +299,16 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         # Call Chutes LTX-2 Video API with image
         async with httpx.AsyncClient(timeout=300.0) as http_client:
-            # Include ALL parameters from API spec
+            # Minimal required params + image
             request_body = {
-                "loras": [None],
+                "prompt": prompt,
+                "images": [image_b64],
                 "width": 768,
                 "height": 512,
-                "images": [image_b64],
-                "prompt": prompt,
-                "pipeline": None,
-                "image_url": None,
-                "video_b64": None,
-                "video_url": None,
                 "frame_rate": 25,
-                "num_frames": 121,
-                "enhance_prompt": False,
+                "num_frames": 97,
                 "image_frame_index": 0,
-                "num_inference_steps": 40
+                "num_inference_steps": 30
             }
             
             logger.info(f"Animate request (image length: {len(image_b64)} chars)")
