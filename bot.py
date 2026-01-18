@@ -167,6 +167,203 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
 
+async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /video command for text-to-video generation."""
+    chat_id = update.effective_chat.id
+    
+    # Get the prompt from command arguments
+    if not context.args:
+        await update.message.reply_text(
+            "🎬 To generate a video, use:\n"
+            "`/video <your prompt>`\n\n"
+            "Example: `/video a cat walking in the garden`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    prompt = " ".join(context.args)
+    
+    # Show typing action
+    await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
+    await update.message.reply_text(f"🎬 Generating video: *{prompt}*\n\n⏳ This may take 1-2 minutes...", parse_mode="Markdown")
+    
+    try:
+        # Call Chutes LTX-2 Video API
+        async with httpx.AsyncClient(timeout=300.0) as http_client:
+            response = await http_client.post(
+                "https://chutes-ltx-2.chutes.ai/generate",
+                headers={
+                    "Authorization": f"Bearer {CHUTES_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "prompt": prompt,
+                    "width": 768,
+                    "height": 512,
+                    "frame_rate": 25,
+                    "num_frames": 121,
+                    "enhance_prompt": True,
+                    "num_inference_steps": 40
+                }
+            )
+            
+            if response.status_code == 200:
+                # Try to parse as JSON (might contain base64 video)
+                try:
+                    json_response = response.json()
+                    logger.info(f"Video response keys: {json_response.keys() if isinstance(json_response, dict) else type(json_response)}")
+                    
+                    # Look for video data in response
+                    video_b64 = None
+                    for key in ['video', 'video_b64', 'output', 'result', 'data', 'generated_video']:
+                        if key in json_response:
+                            val = json_response[key]
+                            if isinstance(val, str):
+                                video_b64 = val
+                                break
+                            elif isinstance(val, list) and len(val) > 0:
+                                video_b64 = val[0]
+                                break
+                    
+                    if video_b64:
+                        video_bytes = base64.b64decode(video_b64)
+                        video_data = io.BytesIO(video_bytes)
+                        video_data.name = "generated_video.mp4"
+                        await update.message.reply_video(
+                            video=video_data,
+                            caption=f"🎬 *{prompt}*",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        logger.error(f"Could not find video in JSON: {json_response}")
+                        await update.message.reply_text("😔 Unexpected response format from the API.")
+                        
+                except Exception:
+                    # Raw video bytes
+                    video_data = io.BytesIO(response.content)
+                    video_data.name = "generated_video.mp4"
+                    await update.message.reply_video(
+                        video=video_data,
+                        caption=f"🎬 *{prompt}*",
+                        parse_mode="Markdown"
+                    )
+            else:
+                logger.error(f"Video generation failed: {response.status_code} - {response.text}")
+                await update.message.reply_text(
+                    f"😔 Video generation failed. Error: {response.status_code}"
+                )
+                
+    except httpx.TimeoutException:
+        await update.message.reply_text(
+            "⏳ The video is taking too long to generate. Please try a simpler prompt."
+        )
+    except Exception as e:
+        logger.error(f"Video generation error: {e}")
+        await update.message.reply_text(
+            "😔 Something went wrong while generating your video. Please try again later."
+        )
+
+
+async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /animate command for image-to-video generation."""
+    chat_id = update.effective_chat.id
+    
+    # Check if user has an image stored
+    if chat_id not in user_images:
+        await update.message.reply_text(
+            "📷 To animate an image, first send me a photo, then use:\n"
+            "`/animate <motion description>`\n\n"
+            "Example: Send a photo, then `/animate slowly zoom in while clouds move`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Get the prompt from command arguments
+    prompt = " ".join(context.args) if context.args else "gentle movement and animation"
+    
+    # Show typing action
+    await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
+    await update.message.reply_text(f"🎬 Animating your image: *{prompt}*\n\n⏳ This may take 1-2 minutes...", parse_mode="Markdown")
+    
+    try:
+        # Call Chutes LTX-2 Video API with image
+        async with httpx.AsyncClient(timeout=300.0) as http_client:
+            response = await http_client.post(
+                "https://chutes-ltx-2.chutes.ai/generate",
+                headers={
+                    "Authorization": f"Bearer {CHUTES_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "prompt": prompt,
+                    "images": [user_images[chat_id]],
+                    "width": 768,
+                    "height": 512,
+                    "frame_rate": 25,
+                    "num_frames": 121,
+                    "enhance_prompt": True,
+                    "image_frame_index": 0,
+                    "num_inference_steps": 40
+                }
+            )
+            
+            if response.status_code == 200:
+                # Try to parse as JSON (might contain base64 video)
+                try:
+                    json_response = response.json()
+                    logger.info(f"Animate response keys: {json_response.keys() if isinstance(json_response, dict) else type(json_response)}")
+                    
+                    # Look for video data in response
+                    video_b64 = None
+                    for key in ['video', 'video_b64', 'output', 'result', 'data', 'generated_video']:
+                        if key in json_response:
+                            val = json_response[key]
+                            if isinstance(val, str):
+                                video_b64 = val
+                                break
+                            elif isinstance(val, list) and len(val) > 0:
+                                video_b64 = val[0]
+                                break
+                    
+                    if video_b64:
+                        video_bytes = base64.b64decode(video_b64)
+                        video_data = io.BytesIO(video_bytes)
+                        video_data.name = "animated_video.mp4"
+                        await update.message.reply_video(
+                            video=video_data,
+                            caption=f"🎬 Animated: *{prompt}*",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        logger.error(f"Could not find video in JSON: {json_response}")
+                        await update.message.reply_text("😔 Unexpected response format from the API.")
+                        
+                except Exception:
+                    # Raw video bytes
+                    video_data = io.BytesIO(response.content)
+                    video_data.name = "animated_video.mp4"
+                    await update.message.reply_video(
+                        video=video_data,
+                        caption=f"🎬 Animated: *{prompt}*",
+                        parse_mode="Markdown"
+                    )
+            else:
+                logger.error(f"Animation failed: {response.status_code} - {response.text}")
+                await update.message.reply_text(
+                    f"😔 Animation failed. Error: {response.status_code}"
+                )
+                
+    except httpx.TimeoutException:
+        await update.message.reply_text(
+            "⏳ The animation is taking too long. Please try again."
+        )
+    except Exception as e:
+        logger.error(f"Animation error: {e}")
+        await update.message.reply_text(
+            "😔 Something went wrong while animating your image. Please try again later."
+        )
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming photos and store them for editing."""
     chat_id = update.effective_chat.id
@@ -354,6 +551,8 @@ def main() -> None:
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("generate", generate_command))
     application.add_handler(CommandHandler("edit", edit_command))
+    application.add_handler(CommandHandler("video", video_command))
+    application.add_handler(CommandHandler("animate", animate_command))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
