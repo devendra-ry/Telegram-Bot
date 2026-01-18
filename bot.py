@@ -298,23 +298,15 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         # Call LTX-2 Text-to-Video API
         async with httpx.AsyncClient(timeout=300.0) as http_client:
+            # Minimal parameters only
             request_body = {
-                "seed": 42,
-                "height": 512,
-                "images": [None],
                 "prompt": prompt,
-                "pipeline": None,
-                "image_b64": None,
-                "image_url": None,
-                "video_url": None,
+                "height": 512,
                 "frame_rate": 25,
-                "image_strength": 1,
-                "image_frame_index": 0,
-                "cfg_guidance_scale": 3,
                 "num_inference_steps": 40
             }
             
-            logger.info(f"LTX T2V request: {prompt[:50]}...")
+            logger.info(f"LTX T2V request: {request_body}")
             
             response = await http_client.post(
                 "https://chutes-ltx-2.chutes.ai/generate",
@@ -405,19 +397,12 @@ async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         # Call LTX-2 Image-to-Video API
         async with httpx.AsyncClient(timeout=300.0) as http_client:
+            # Minimal parameters + image
             request_body = {
-                "seed": 42,
-                "height": 512,
-                "images": [None],
                 "prompt": prompt,
-                "pipeline": None,
                 "image_b64": image_b64,
-                "image_url": None,
-                "video_url": None,
+                "height": 512,
                 "frame_rate": 25,
-                "image_strength": 1,
-                "image_frame_index": 0,
-                "cfg_guidance_scale": 3,
                 "num_inference_steps": 40
             }
             
