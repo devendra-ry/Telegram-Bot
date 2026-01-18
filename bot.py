@@ -296,17 +296,28 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(f"🎬 Generating video: *{prompt}*\n\n⏳ This may take 2-3 minutes...", parse_mode="Markdown")
     
     try:
-        # Call LTX Text-to-Video API
+        # Call LTX-2 Text-to-Video API
         async with httpx.AsyncClient(timeout=300.0) as http_client:
             request_body = {
+                "seed": 42,
+                "height": 512,
+                "images": [None],
                 "prompt": prompt,
-                "negative_prompt": "low quality, blurry, distorted"
+                "pipeline": None,
+                "image_b64": None,
+                "image_url": None,
+                "video_url": None,
+                "frame_rate": 25,
+                "image_strength": 1,
+                "image_frame_index": 0,
+                "cfg_guidance_scale": 3,
+                "num_inference_steps": 40
             }
             
             logger.info(f"LTX T2V request: {prompt[:50]}...")
             
             response = await http_client.post(
-                "https://chutes-ltx-video-13b-0-9-7-dev-t2v.chutes.ai/generate",
+                "https://chutes-ltx-2.chutes.ai/generate",
                 headers={
                     "Authorization": f"Bearer {CHUTES_API_KEY}",
                     "Content-Type": "application/json"
@@ -392,18 +403,28 @@ async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Get raw base64 image
         image_b64 = user_images[chat_id]
         
-        # Call LTX Image-to-Video API
+        # Call LTX-2 Image-to-Video API
         async with httpx.AsyncClient(timeout=300.0) as http_client:
             request_body = {
-                "image": image_b64,
+                "seed": 42,
+                "height": 512,
+                "images": [None],
                 "prompt": prompt,
-                "negative_prompt": "low quality, blurry, distorted"
+                "pipeline": None,
+                "image_b64": image_b64,
+                "image_url": None,
+                "video_url": None,
+                "frame_rate": 25,
+                "image_strength": 1,
+                "image_frame_index": 0,
+                "cfg_guidance_scale": 3,
+                "num_inference_steps": 40
             }
             
             logger.info(f"LTX I2V request (image: {len(image_b64)} chars)")
             
             response = await http_client.post(
-                "https://chutes-ltx-video-13b-0-9-7-dev-i2v.chutes.ai/generate",
+                "https://chutes-ltx-2.chutes.ai/generate",
                 headers={
                     "Authorization": f"Bearer {CHUTES_API_KEY}",
                     "Content-Type": "application/json"
