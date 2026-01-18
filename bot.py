@@ -251,23 +251,62 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             
             if response.status_code == 200:
-                # The API returns image data
-                image_data = io.BytesIO(response.content)
-                image_data.name = "edited_image.png"
-                await update.message.reply_photo(
-                    photo=image_data,
-                    caption=f"✨ Edited: *{prompt}*",
-                    parse_mode="Markdown"
-                )
-                
-                # Store the edited image for further edits
-                edited_b64 = base64.b64encode(response.content).decode('utf-8')
-                user_images[chat_id] = edited_b64
+                # Try to parse as JSON first (API may return base64 in JSON)
+                try:
+                    json_response = response.json()
+                    logger.info(f"Image edit JSON response keys: {json_response.keys() if isinstance(json_response, dict) else type(json_response)}")
+                    
+                    # Handle different possible JSON response formats
+                    if isinstance(json_response, dict):
+                        # Try common keys for base64 image data
+                        image_b64 = None
+                        for key in ['image', 'images', 'output', 'result', 'data', 'image_b64', 'generated_image']:
+                            if key in json_response:
+                                val = json_response[key]
+                                if isinstance(val, str):
+                                    image_b64 = val
+                                    break
+                                elif isinstance(val, list) and len(val) > 0:
+                                    image_b64 = val[0]
+                                    break
+                        
+                        if image_b64:
+                            # Decode base64 to bytes
+                            image_bytes = base64.b64decode(image_b64)
+                            image_data = io.BytesIO(image_bytes)
+                            image_data.name = "edited_image.png"
+                            await update.message.reply_photo(
+                                photo=image_data,
+                                caption=f"✨ Edited: *{prompt}*",
+                                parse_mode="Markdown"
+                            )
+                            # Store for further edits
+                            user_images[chat_id] = image_b64
+                        else:
+                            logger.error(f"Could not find image in JSON response: {json_response}")
+                            await update.message.reply_text("😔 Unexpected response format from the API.")
+                    else:
+                        logger.error(f"Unexpected JSON type: {type(json_response)}")
+                        await update.message.reply_text("😔 Unexpected response format from the API.")
+                        
+                except Exception as json_err:
+                    # Not JSON, try as raw image bytes
+                    logger.info(f"Response is not JSON, treating as raw image. Error: {json_err}")
+                    image_data = io.BytesIO(response.content)
+                    image_data.name = "edited_image.png"
+                    await update.message.reply_photo(
+                        photo=image_data,
+                        caption=f"✨ Edited: *{prompt}*",
+                        parse_mode="Markdown"
+                    )
+                    # Store the edited image for further edits
+                    edited_b64 = base64.b64encode(response.content).decode('utf-8')
+                    user_images[chat_id] = edited_b64
                 
             else:
                 logger.error(f"Image edit failed: {response.status_code} - {response.text}")
                 await update.message.reply_text(
-                    "😔 I couldn't edit that image right now. Please try again with a different prompt."
+                    f"😔 I couldn't edit that image. Error: {response.status_code}"
                 )
                 
     except httpx.TimeoutException:
