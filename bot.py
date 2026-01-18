@@ -310,7 +310,7 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "cfg_guidance_scale": 4.0,
                 "seed": 42,
                 "distilled": False,
-                "enhance_prompt": False
+                "enhance_prompt": True
             }
             
             logger.info(f"LTX T2V request: {request_body}")
@@ -432,7 +432,7 @@ async def video_cinematic_command(update: Update, context: ContextTypes.DEFAULT_
                 "cfg_guidance_scale": 4.0,
                 "seed": random.randint(1, 1000000),
                 "distilled": False,
-                "enhance_prompt": False,
+                "enhance_prompt": True,
                 "loras": [
                     {"name": camera_lora, "strength": 1.0}
                 ]
@@ -538,7 +538,7 @@ async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "cfg_guidance_scale": 4.0,
                 "seed": 42,
                 "distilled": False,
-                "enhance_prompt": False
+                "enhance_prompt": True
             }
             
             logger.info(f"LTX I2V request (image: {len(image_b64)} chars)")
