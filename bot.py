@@ -298,12 +298,17 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         # Call LTX-2 Text-to-Video API
         async with httpx.AsyncClient(timeout=300.0) as http_client:
-            # Minimal parameters only
+            # Parameters based on LTX-2 GenerationInput model
             request_body = {
                 "prompt": prompt,
                 "height": 512,
+                "width": 768,
+                "num_frames": 121,
                 "frame_rate": 25,
-                "num_inference_steps": 40
+                "num_inference_steps": 40,
+                "cfg_guidance_scale": 3.0,
+                "seed": 42,
+                "distilled": True
             }
             
             logger.info(f"LTX T2V request: {request_body}")
@@ -397,13 +402,18 @@ async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         # Call LTX-2 Image-to-Video API
         async with httpx.AsyncClient(timeout=300.0) as http_client:
-            # Minimal parameters + image
+            # Parameters based on LTX-2 GenerationInput model
             request_body = {
                 "prompt": prompt,
                 "image_b64": image_b64,
                 "height": 512,
+                "width": 768,
+                "num_frames": 121,
                 "frame_rate": 25,
-                "num_inference_steps": 40
+                "num_inference_steps": 40,
+                "cfg_guidance_scale": 3.0,
+                "seed": 42,
+                "distilled": True
             }
             
             logger.info(f"LTX I2V request (image: {len(image_b64)} chars)")
