@@ -5,6 +5,7 @@ Using Chutes API for AI responses with conversation memory
 
 import os
 import io
+import base64
 import logging
 import httpx
 import threading
@@ -37,6 +38,9 @@ client = OpenAI(
 
 # Conversation memory: {chat_id: [messages]}
 conversation_history = defaultdict(list)
+
+# Store user's last uploaded image for editing: {chat_id: base64_string}
+user_images = {}
 
 # Maximum messages to keep in history (to avoid token limits)
 MAX_HISTORY = 40
@@ -163,6 +167,120 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
 
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle incoming photos and store them for editing."""
+    chat_id = update.effective_chat.id
+    
+    # Get the largest photo size
+    photo = update.message.photo[-1]
+    
+    try:
+        # Download the photo
+        file = await context.bot.get_file(photo.file_id)
+        photo_bytes = await file.download_as_bytearray()
+        
+        # Convert to base64
+        photo_b64 = base64.b64encode(photo_bytes).decode('utf-8')
+        
+        # Store for later editing
+        user_images[chat_id] = photo_b64
+        
+        await update.message.reply_text(
+            "📸 Image received! You can now edit it using:\n"
+            "`/edit <your prompt>`\n\n"
+            "Example: `/edit make the sky purple`",
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        logger.error(f"Photo handling error: {e}")
+        await update.message.reply_text(
+            "😔 I couldn't process that image. Please try sending it again."
+        )
+
+
+async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /edit command for image editing."""
+    chat_id = update.effective_chat.id
+    
+    # Check if user has an image stored
+    if chat_id not in user_images:
+        await update.message.reply_text(
+            "📷 To edit an image, first send me a photo, then use:\n"
+            "`/edit <your prompt>`\n\n"
+            "Example: Send a photo, then `/edit make it look like a painting`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Get the prompt from command arguments
+    if not context.args:
+        await update.message.reply_text(
+            "✨ To edit your image, use:\n"
+            "`/edit <your prompt>`\n\n"
+            "Example: `/edit add sunglasses`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    prompt = " ".join(context.args)
+    
+    # Show upload photo action
+    await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+    await update.message.reply_text(f"🎨 Editing your image: *{prompt}*\n\nThis may take a moment...", parse_mode="Markdown")
+    
+    try:
+        # Call Chutes Qwen Image Edit API
+        async with httpx.AsyncClient(timeout=120.0) as http_client:
+            response = await http_client.post(
+                "https://chutes-qwen-image-edit-2511.chutes.ai/generate",
+                headers={
+                    "Authorization": f"Bearer {CHUTES_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "seed": None,
+                    "width": 1024,
+                    "height": 1024,
+                    "prompt": prompt,
+                    "image_b64s": [user_images[chat_id]],
+                    "true_cfg_scale": 4,
+                    "negative_prompt": "",
+                    "num_inference_steps": 40
+                }
+            )
+            
+            if response.status_code == 200:
+                # The API returns image data
+                image_data = io.BytesIO(response.content)
+                image_data.name = "edited_image.png"
+                await update.message.reply_photo(
+                    photo=image_data,
+                    caption=f"✨ Edited: *{prompt}*",
+                    parse_mode="Markdown"
+                )
+                
+                # Store the edited image for further edits
+                edited_b64 = base64.b64encode(response.content).decode('utf-8')
+                user_images[chat_id] = edited_b64
+                
+            else:
+                logger.error(f"Image edit failed: {response.status_code} - {response.text}")
+                await update.message.reply_text(
+                    "😔 I couldn't edit that image right now. Please try again with a different prompt."
+                )
+                
+    except httpx.TimeoutException:
+        await update.message.reply_text(
+            "⏳ The image edit is taking too long. Please try a simpler prompt."
+        )
+    except Exception as e:
+        logger.error(f"Image edit error: {e}")
+        await update.message.reply_text(
+            "😔 Something went wrong while editing your image. Please try again later."
+        )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming text messages."""
     chat_id = update.effective_chat.id
@@ -196,11 +314,11 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("generate", generate_command))
+    application.add_handler(CommandHandler("edit", edit_command))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Add error handler
-    application.add_error_handler(error_handler)
-    
     application.add_error_handler(error_handler)
     
     # Start polling
