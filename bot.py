@@ -274,6 +274,197 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ==================== END WAN 2.2 I2V ====================
 
 
+# ==================== LTX VIDEO COMMANDS ====================
+async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /video command for LTX text-to-video generation."""
+    chat_id = update.effective_chat.id
+    
+    # Get the prompt from command arguments
+    if not context.args:
+        await update.message.reply_text(
+            "🎬 To generate a video from text, use:\n"
+            "`/video <your prompt>`\n\n"
+            "Example: `/video a cat walking in a garden`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    prompt = " ".join(context.args)
+    
+    # Show typing action
+    await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
+    await update.message.reply_text(f"🎬 Generating video: *{prompt}*\n\n⏳ This may take 2-3 minutes...", parse_mode="Markdown")
+    
+    try:
+        # Call LTX Text-to-Video API
+        async with httpx.AsyncClient(timeout=300.0) as http_client:
+            request_body = {
+                "prompt": prompt,
+                "negative_prompt": "low quality, blurry, distorted"
+            }
+            
+            logger.info(f"LTX T2V request: {prompt[:50]}...")
+            
+            response = await http_client.post(
+                "https://chutes-ltx-video-13b-0-9-7-dev-t2v.chutes.ai/generate",
+                headers={
+                    "Authorization": f"Bearer {CHUTES_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json=request_body
+            )
+            
+            logger.info(f"LTX T2V response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                # Try to parse as JSON first
+                try:
+                    json_response = response.json()
+                    logger.info(f"LTX T2V response keys: {json_response.keys() if isinstance(json_response, dict) else type(json_response)}")
+                    
+                    video_b64 = None
+                    for key in ['video', 'video_b64', 'output', 'result', 'data']:
+                        if key in json_response:
+                            val = json_response[key]
+                            if isinstance(val, str):
+                                video_b64 = val
+                                break
+                            elif isinstance(val, list) and len(val) > 0:
+                                video_b64 = val[0]
+                                break
+                    
+                    if video_b64:
+                        video_bytes = base64.b64decode(video_b64)
+                        video_data = io.BytesIO(video_bytes)
+                        video_data.name = "generated_video.mp4"
+                        await update.message.reply_video(
+                            video=video_data,
+                            caption=f"🎬 *{prompt}*",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        logger.error(f"Could not find video in JSON: {json_response}")
+                        await update.message.reply_text("😔 Unexpected response format.")
+                        
+                except Exception:
+                    # Raw video bytes
+                    video_data = io.BytesIO(response.content)
+                    video_data.name = "generated_video.mp4"
+                    await update.message.reply_video(
+                        video=video_data,
+                        caption=f"🎬 *{prompt}*",
+                        parse_mode="Markdown"
+                    )
+            else:
+                error_text = response.text[:300]
+                logger.error(f"LTX T2V failed: {response.status_code} - {error_text}")
+                await update.message.reply_text(f"😔 Video generation failed. Error: {response.status_code}")
+                
+    except httpx.TimeoutException:
+        await update.message.reply_text("⏳ Video generation timed out. Please try again.")
+    except Exception as e:
+        logger.error(f"LTX T2V error: {e}")
+        await update.message.reply_text("😔 Something went wrong. Please try again later.")
+
+
+async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ltxanimate command for LTX image-to-video generation."""
+    chat_id = update.effective_chat.id
+    
+    # Check if user has an image stored
+    if chat_id not in user_images:
+        await update.message.reply_text(
+            "📷 To animate with LTX, first send me a photo, then use:\n"
+            "`/ltxanimate <motion description>`\n\n"
+            "Example: Send a photo, then `/ltxanimate camera slowly zooms in`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Get the prompt from command arguments
+    prompt = " ".join(context.args) if context.args else "gentle camera movement"
+    
+    # Show typing action
+    await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
+    await update.message.reply_text(f"🎬 LTX Animating: *{prompt}*\n\n⏳ This may take 2-3 minutes...", parse_mode="Markdown")
+    
+    try:
+        # Get raw base64 image
+        image_b64 = user_images[chat_id]
+        
+        # Call LTX Image-to-Video API
+        async with httpx.AsyncClient(timeout=300.0) as http_client:
+            request_body = {
+                "image": image_b64,
+                "prompt": prompt,
+                "negative_prompt": "low quality, blurry, distorted"
+            }
+            
+            logger.info(f"LTX I2V request (image: {len(image_b64)} chars)")
+            
+            response = await http_client.post(
+                "https://chutes-ltx-video-13b-0-9-7-dev-i2v.chutes.ai/generate",
+                headers={
+                    "Authorization": f"Bearer {CHUTES_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json=request_body
+            )
+            
+            logger.info(f"LTX I2V response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                # Try to parse as JSON first
+                try:
+                    json_response = response.json()
+                    logger.info(f"LTX I2V response keys: {json_response.keys() if isinstance(json_response, dict) else type(json_response)}")
+                    
+                    video_b64 = None
+                    for key in ['video', 'video_b64', 'output', 'result', 'data']:
+                        if key in json_response:
+                            val = json_response[key]
+                            if isinstance(val, str):
+                                video_b64 = val
+                                break
+                            elif isinstance(val, list) and len(val) > 0:
+                                video_b64 = val[0]
+                                break
+                    
+                    if video_b64:
+                        video_bytes = base64.b64decode(video_b64)
+                        video_data = io.BytesIO(video_bytes)
+                        video_data.name = "ltx_animated.mp4"
+                        await update.message.reply_video(
+                            video=video_data,
+                            caption=f"🎬 LTX: *{prompt}*",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        logger.error(f"Could not find video in JSON: {json_response}")
+                        await update.message.reply_text("😔 Unexpected response format.")
+                        
+                except Exception:
+                    # Raw video bytes
+                    video_data = io.BytesIO(response.content)
+                    video_data.name = "ltx_animated.mp4"
+                    await update.message.reply_video(
+                        video=video_data,
+                        caption=f"🎬 LTX: *{prompt}*",
+                        parse_mode="Markdown"
+                    )
+            else:
+                error_text = response.text[:300]
+                logger.error(f"LTX I2V failed: {response.status_code} - {error_text}")
+                await update.message.reply_text(f"😔 Animation failed. Error: {response.status_code}")
+                
+    except httpx.TimeoutException:
+        await update.message.reply_text("⏳ Animation timed out. Please try again.")
+    except Exception as e:
+        logger.error(f"LTX I2V error: {e}")
+        await update.message.reply_text("😔 Something went wrong. Please try again later.")
+# ==================== END LTX VIDEO COMMANDS ====================
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming photos and store them for editing."""
     chat_id = update.effective_chat.id
@@ -462,7 +653,8 @@ def main() -> None:
     application.add_handler(CommandHandler("generate", generate_command))
     application.add_handler(CommandHandler("edit", edit_command))
     application.add_handler(CommandHandler("animate", animate_command))  # WAN 2.2 Image-to-Video
-    # application.add_handler(CommandHandler("video", video_command))  # Text-to-video (model cold)
+    application.add_handler(CommandHandler("video", video_command))  # LTX Text-to-Video
+    application.add_handler(CommandHandler("ltxanimate", ltxanimate_command))  # LTX Image-to-Video
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
