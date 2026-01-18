@@ -803,6 +803,21 @@ def main() -> None:
     # Add error handler
     application.add_error_handler(error_handler)
     
+    # Register commands with Telegram (so they appear in / menu)
+    async def post_init(application):
+        await application.bot.set_my_commands([
+            ("start", "Start the bot"),
+            ("clear", "Clear conversation history"),
+            ("generate", "Generate image from text"),
+            ("edit", "Edit your uploaded image"),
+            ("animate", "Animate image to video (WAN 2.2)"),
+            ("video", "Generate video from text (LTX)"),
+            ("video_cinematic", "Cinematic video with camera movement"),
+            ("ltxanimate", "Animate image to video (LTX)"),
+        ])
+    
+    application.post_init = post_init
+    
     # Start polling
     logger.info("Zara is online and ready to chat! 💕")
     
