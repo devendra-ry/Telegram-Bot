@@ -298,17 +298,19 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         # Call LTX-2 Text-to-Video API
         async with httpx.AsyncClient(timeout=300.0) as http_client:
-            # Parameters based on LTX-2 GenerationInput model
+            # MAXIMUM QUALITY parameters for LTX-2
             request_body = {
                 "prompt": prompt,
-                "height": 512,
-                "width": 768,
-                "num_frames": 121,
-                "frame_rate": 25,
-                "num_inference_steps": 40,
-                "cfg_guidance_scale": 3.0,
+                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, shaky camera, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts, blurry, pixelated",
+                "height": 1088,
+                "width": 1920,
+                "num_frames": 161,  # ~5 seconds at 30fps
+                "frame_rate": 30,
+                "num_inference_steps": 80,  # Maximum quality
+                "cfg_guidance_scale": 4.0,
                 "seed": 42,
-                "distilled": True
+                "distilled": False,
+                "enhance_prompt": False
             }
             
             logger.info(f"LTX T2V request: {request_body}")
@@ -375,6 +377,126 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("😔 Something went wrong. Please try again later.")
 
 
+# Camera LoRAs for cinematic effects
+CAMERA_LORAS = [
+    "camera-dolly-in",
+    "camera-dolly-out",
+    "camera-dolly-left",
+    "camera-dolly-right",
+    "camera-jib-up",
+    "camera-jib-down",
+]
+
+async def video_cinematic_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /video_cinematic command for cinematic video with camera movements."""
+    import random
+    chat_id = update.effective_chat.id
+    
+    # Get the prompt from command arguments
+    if not context.args:
+        await update.message.reply_text(
+            "🎥 To generate a cinematic video with camera movement, use:\n"
+            "`/video_cinematic <your prompt>`\n\n"
+            "Example: `/video_cinematic a majestic mountain landscape`\n\n"
+            "Camera movements: dolly-in, dolly-out, dolly-left, dolly-right, jib-up, jib-down",
+            parse_mode="Markdown"
+        )
+        return
+    
+    prompt = " ".join(context.args)
+    
+    # Pick a random camera movement
+    camera_lora = random.choice(CAMERA_LORAS)
+    camera_name = camera_lora.replace("camera-", "").replace("-", " ").title()
+    
+    # Show typing action
+    await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
+    await update.message.reply_text(
+        f"🎥 Generating cinematic video: *{prompt}*\n"
+        f"📷 Camera: *{camera_name}*\n\n"
+        f"⏳ This may take 8-12 minutes (high quality)...",
+        parse_mode="Markdown"
+    )
+    
+    try:
+        # Call LTX-2 with camera LoRA
+        async with httpx.AsyncClient(timeout=600.0) as http_client:  # 10 min timeout
+            request_body = {
+                "prompt": prompt,
+                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts, blurry, pixelated",
+                "height": 1088,
+                "width": 1920,
+                "num_frames": 161,
+                "frame_rate": 30,
+                "num_inference_steps": 80,
+                "cfg_guidance_scale": 4.0,
+                "seed": random.randint(1, 1000000),
+                "distilled": False,
+                "enhance_prompt": False,
+                "loras": [
+                    {"name": camera_lora, "strength": 1.0}
+                ]
+            }
+            
+            logger.info(f"Cinematic request with {camera_lora}: {prompt[:50]}...")
+            
+            response = await http_client.post(
+                "https://chutes-ltx-2.chutes.ai/generate",
+                headers={
+                    "Authorization": f"Bearer {CHUTES_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json=request_body
+            )
+            
+            logger.info(f"Cinematic response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                try:
+                    json_response = response.json()
+                    video_b64 = None
+                    for key in ['video', 'video_b64', 'output', 'result', 'data']:
+                        if key in json_response:
+                            val = json_response[key]
+                            if isinstance(val, str):
+                                video_b64 = val
+                                break
+                            elif isinstance(val, list) and len(val) > 0:
+                                video_b64 = val[0]
+                                break
+                    
+                    if video_b64:
+                        video_bytes = base64.b64decode(video_b64)
+                        video_data = io.BytesIO(video_bytes)
+                        video_data.name = "cinematic_video.mp4"
+                        await update.message.reply_video(
+                            video=video_data,
+                            caption=f"🎥 *{prompt}*\n📷 Camera: {camera_name}",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        await update.message.reply_text("😔 Unexpected response format.")
+                        
+                except Exception:
+                    video_data = io.BytesIO(response.content)
+                    video_data.name = "cinematic_video.mp4"
+                    await update.message.reply_video(
+                        video=video_data,
+                        caption=f"🎥 *{prompt}*\n📷 Camera: {camera_name}",
+                        parse_mode="Markdown"
+                    )
+            else:
+                error_text = response.text[:300]
+                logger.error(f"Cinematic failed: {response.status_code} - {error_text}")
+                await update.message.reply_text(f"😔 Video generation failed. Error: {response.status_code}")
+                
+    except httpx.TimeoutException:
+        await update.message.reply_text("⏳ Video generation timed out. Please try again.")
+    except Exception as e:
+        logger.error(f"Cinematic error: {e}")
+        await update.message.reply_text("😔 Something went wrong. Please try again later.")
+
+
 async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /ltxanimate command for LTX image-to-video generation."""
     chat_id = update.effective_chat.id
@@ -402,18 +524,21 @@ async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         # Call LTX-2 Image-to-Video API
         async with httpx.AsyncClient(timeout=300.0) as http_client:
-            # Parameters based on LTX-2 GenerationInput model
+            # MAXIMUM QUALITY parameters for LTX-2
             request_body = {
                 "prompt": prompt,
+                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, shaky camera, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts, blurry, pixelated",
                 "image_b64": image_b64,
-                "height": 512,
-                "width": 768,
-                "num_frames": 121,
-                "frame_rate": 25,
-                "num_inference_steps": 40,
-                "cfg_guidance_scale": 3.0,
+                "image_strength": 1.0,
+                "height": 1088,
+                "width": 1920,
+                "num_frames": 161,
+                "frame_rate": 30,
+                "num_inference_steps": 80,
+                "cfg_guidance_scale": 4.0,
                 "seed": 42,
-                "distilled": True
+                "distilled": False,
+                "enhance_prompt": False
             }
             
             logger.info(f"LTX I2V request (image: {len(image_b64)} chars)")
@@ -670,6 +795,7 @@ def main() -> None:
     application.add_handler(CommandHandler("edit", edit_command))
     application.add_handler(CommandHandler("animate", animate_command))  # WAN 2.2 Image-to-Video
     application.add_handler(CommandHandler("video", video_command))  # LTX Text-to-Video
+    application.add_handler(CommandHandler("video_cinematic", video_cinematic_command))  # LTX Cinematic with camera LoRAs
     application.add_handler(CommandHandler("ltxanimate", ltxanimate_command))  # LTX Image-to-Video
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
