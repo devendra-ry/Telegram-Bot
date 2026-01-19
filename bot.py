@@ -108,59 +108,48 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /generate command for image generation with quality presets."""
+    """Handle /generate command for fast image generation (Z-Image-Turbo)."""
     chat_id = update.effective_chat.id
-    
-    # Quality presets (steps) - Z-Image-Turbo
-    QUALITY_PRESETS = {
-        "fast": 9,
-        "balanced": 30,
-        "hq": 50,
-        "max": 100
-    }
     
     # Get the prompt from command arguments
     if not context.args:
         await update.message.reply_text(
             "✨ To generate an image, use:\n"
-            "`/generate [quality] <prompt>`\n\n"
-            "**Quality presets:**\n"
-            "⚡ `fast` - 9 steps\n"
-            "⚖️ `balanced` - 30 steps (default)\n"
-            "🎨 `hq` - 50 steps\n"
-            "💎 `max` - 100 steps\n\n"
-            "Examples:\n"
+            "`/generate [width height] <prompt>`\n\n"
+            "**Examples:**\n"
             "`/generate a sunset over mountains`\n"
-            "`/generate hq a detailed castle`",
+            "`/generate 1920 1080 a wide landscape`\n\n"
+            "Default: 1024×1024 (range: 576-2048)",
             parse_mode="Markdown"
         )
         return
     
-    # Check if first arg is a quality preset
     args = list(context.args)
-    quality = "balanced"  # default
-    if args[0].lower() in QUALITY_PRESETS:
-        quality = args[0].lower()
-        args = args[1:]
+    width = 1024  # default
+    height = 1024  # default
+    
+    # Check if first two args are dimensions
+    if len(args) >= 3 and args[0].isdigit() and args[1].isdigit():
+        width = max(576, min(2048, int(args[0])))
+        height = max(576, min(2048, int(args[1])))
+        args = args[2:]
     
     if not args:
-        await update.message.reply_text("Please provide a prompt after the quality preset.")
+        await update.message.reply_text("Please provide a prompt.")
         return
     
     prompt = " ".join(args)
-    steps = QUALITY_PRESETS[quality]
-    quality_emoji = {"fast": "⚡", "balanced": "⚖️", "hq": "🎨", "max": "💎"}[quality]
     
     # Show upload photo action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
     await update.message.reply_text(
-        f"🎨 Creating: *{prompt}*\n{quality_emoji} Quality: {quality} ({steps} steps)",
+        f"🎨 Generating: *{prompt}*\n📐 Size: {width}×{height}",
         parse_mode="Markdown"
     )
     
     try:
         # Call Chutes Image API (Z-Image Turbo)
-        async with httpx.AsyncClient(timeout=180.0) as http_client:
+        async with httpx.AsyncClient(timeout=120.0) as http_client:
             response = await http_client.post(
                 "https://chutes-z-image-turbo.chutes.ai/generate",
                 headers={
@@ -169,9 +158,9 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 },
                 json={
                     "prompt": prompt,
-                    "height": 2048,
-                    "width": 2048,
-                    "num_inference_steps": steps,
+                    "height": height,
+                    "width": width,
+                    "num_inference_steps": 9,
                     "guidance_scale": 0.0,
                     "shift": 3.0,
                     "max_sequence_length": 512
@@ -184,7 +173,7 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 image_data.name = "generated_image.png"
                 await update.message.reply_photo(
                     photo=image_data,
-                    caption=f"✨ *{prompt}*\n{quality_emoji} {quality.capitalize()}",
+                    caption=f"⚡ *{prompt}*",
                     parse_mode="Markdown"
                 )
             else:
@@ -204,70 +193,77 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
 
+
 async def imagine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /imagine command for high-quality image generation with quality presets."""
+    """Handle /imagine command for high-quality image generation (Qwen-Image-2512)."""
     chat_id = update.effective_chat.id
-    
-    # Quality presets (steps) - Qwen max is 75
-    QUALITY_PRESETS = {
-        "fast": 15,
-        "balanced": 30,
-        "hq": 50,
-        "max": 75
-    }
     
     # Get the prompt from command arguments
     if not context.args:
         await update.message.reply_text(
             "🎨 To generate a high-quality image, use:\n"
-            "`/imagine [quality] <prompt>`\n\n"
-            "**Quality presets:**\n"
-            "⚡ `fast` - 15 steps\n"
-            "⚖️ `balanced` - 30 steps (default)\n"
-            "🎨 `hq` - 50 steps\n"
-            "💎 `max` - 75 steps\n\n"
-            "Examples:\n"
+            "`/imagine [width height] [cfg=X] <prompt>`\n\n"
+            "**Examples:**\n"
             "`/imagine a sunset over mountains`\n"
-            "`/imagine max a photorealistic portrait`",
+            "`/imagine 1920 1080 a wide landscape`\n"
+            "`/imagine cfg=6 a detailed portrait`\n\n"
+            "Default: 1328×1328, cfg=4 (range: 128-2048, cfg: 0-10)",
             parse_mode="Markdown"
         )
         return
     
-    # Check if first arg is a quality preset
     args = list(context.args)
-    quality = "balanced"  # default
-    if args[0].lower() in QUALITY_PRESETS:
-        quality = args[0].lower()
-        args = args[1:]
+    width = 1328  # default
+    height = 1328  # default
+    cfg_scale = 4.0  # default
+    negative_prompt = ""
+    
+    # Check if first two args are dimensions
+    if len(args) >= 3 and args[0].isdigit() and args[1].isdigit():
+        width = max(128, min(2048, int(args[0])))
+        height = max(128, min(2048, int(args[1])))
+        args = args[2:]
+    
+    # Check for cfg=X parameter
+    new_args = []
+    for arg in args:
+        if arg.lower().startswith("cfg="):
+            try:
+                cfg_scale = max(0.0, min(10.0, float(arg[4:])))
+            except ValueError:
+                pass
+        elif arg.lower().startswith("neg="):
+            negative_prompt = arg[4:]
+        else:
+            new_args.append(arg)
+    args = new_args
     
     if not args:
-        await update.message.reply_text("Please provide a prompt after the quality preset.")
+        await update.message.reply_text("Please provide a prompt.")
         return
     
     prompt = " ".join(args)
-    steps = QUALITY_PRESETS[quality]
-    quality_emoji = {"fast": "⚡", "balanced": "⚖️", "hq": "🎨", "max": "💎"}[quality]
     
     # Show typing action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
     await update.message.reply_text(
-        f"🎨 Generating: *{prompt}*\n{quality_emoji} Quality: {quality} ({steps} steps)",
+        f"🎨 Generating: *{prompt}*\n📐 Size: {width}×{height} | CFG: {cfg_scale}",
         parse_mode="Markdown"
     )
     
     try:
         # Call Qwen-Image-2512 API
-        async with httpx.AsyncClient(timeout=300.0) as http_client:  # Longer timeout for max quality
+        async with httpx.AsyncClient(timeout=180.0) as http_client:
             request_body = {
                 "prompt": prompt,
-                "negative_prompt": "low quality, blurry, distorted, ugly, bad anatomy",
-                "height": 2048,
-                "width": 2048,
-                "num_inference_steps": steps,
-                "true_cfg_scale": 4.0
+                "negative_prompt": negative_prompt,
+                "height": height,
+                "width": width,
+                "num_inference_steps": 50,
+                "true_cfg_scale": cfg_scale
             }
             
-            logger.info(f"Imagine request ({quality}): {prompt[:50]}...")
+            logger.info(f"Imagine request: {prompt[:50]}...")
             
             response = await http_client.post(
                 "https://chutes-qwen-image-2512.chutes.ai/generate",
@@ -284,7 +280,7 @@ async def imagine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 image_data.name = "imagine.jpg"
                 await update.message.reply_photo(
                     photo=image_data,
-                    caption=f"🎨 *{prompt}*\n{quality_emoji} {quality.capitalize()}",
+                    caption=f"🎨 *{prompt}*",
                     parse_mode="Markdown"
                 )
             else:
@@ -304,50 +300,56 @@ async def imagine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
 
+
+
 async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /animate command for image-to-video generation with quality presets."""
+    """Handle /animate command for image-to-video generation (WAN 2.2)."""
     chat_id = update.effective_chat.id
-    
-    # Quality presets for WAN 2.2
-    QUALITY_PRESETS = {
-        "fast": {"resolution": "480p", "frames": 81, "fast": True, "fps": 16},
-        "balanced": {"resolution": "480p", "frames": 81, "fast": False, "fps": 16},
-        "hq": {"resolution": "720p", "frames": 81, "fast": False, "fps": 24},
-        "max": {"resolution": "720p", "frames": 121, "fast": False, "fps": 24}
-    }
     
     # Check if user has an image stored
     if chat_id not in user_images:
         await update.message.reply_text(
             "📷 To animate an image, first send me a photo, then use:\n"
-            "`/animate [quality] <motion description>`\n\n"
-            "**Quality presets:**\n"
-            "⚡ `fast` - 480p, 81 frames, fast mode\n"
-            "⚖️ `balanced` - 480p, 81 frames (default)\n"
-            "🎨 `hq` - 720p, 81 frames, 24fps\n"
-            "💎 `max` - 720p, 121 frames, 24fps\n\n"
-            "Example: `/animate hq she slowly turns her head`",
+            "`/animate [res=X] [frames=X] <motion description>`\n\n"
+            "**Options:**\n"
+            "📐 `res=` 480p, 720p (default)\n"
+            "🎞️ `frames=` 21-140 (default: 81)\n\n"
+            "**Examples:**\n"
+            "`/animate she slowly turns her head`\n"
+            "`/animate res=480p gentle movement`\n"
+            "`/animate frames=120 dancing motion`",
             parse_mode="Markdown"
         )
         return
     
-    # Check if first arg is a quality preset
     args = list(context.args) if context.args else []
-    quality = "balanced"  # default
-    if args and args[0].lower() in QUALITY_PRESETS:
-        quality = args[0].lower()
-        args = args[1:]
+    resolution = "720p"  # default
+    frames = 81  # default
+    
+    # Parse optional parameters
+    new_args = []
+    for arg in args:
+        if arg.lower().startswith("res="):
+            res = arg[4:].lower()
+            if res in ["480p", "720p"]:
+                resolution = res
+        elif arg.lower().startswith("frames="):
+            try:
+                frames = max(21, min(140, int(arg[7:])))
+            except ValueError:
+                pass
+        else:
+            new_args.append(arg)
+    args = new_args
     
     prompt = " ".join(args) if args else "gentle movement and subtle animation"
-    preset = QUALITY_PRESETS[quality]
-    quality_emoji = {"fast": "⚡", "balanced": "⚖️", "hq": "🎨", "max": "💎"}[quality]
     
     # Show typing action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
     await update.message.reply_text(
         f"🎬 Animating: *{prompt}*\n"
-        f"{quality_emoji} Quality: {quality} ({preset['resolution']}, {preset['frames']} frames)\n\n"
-        f"⏳ This may take 1-3 minutes...",
+        f"📐 {resolution} | Frames: {frames}\n\n"
+        f"⏳ This may take 2-5 minutes...",
         parse_mode="Markdown"
     )
     
@@ -356,19 +358,19 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         image_b64 = user_images[chat_id]
         
         # Call WAN 2.2 Image-to-Video API
-        async with httpx.AsyncClient(timeout=420.0) as http_client:  # Longer timeout for max quality
+        async with httpx.AsyncClient(timeout=300.0) as http_client:
             request_body = {
                 "image": image_b64,
                 "prompt": prompt,
                 "negative_prompt": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-                "resolution": preset["resolution"],
-                "frames": preset["frames"],
-                "fps": preset["fps"],
-                "fast": preset["fast"],
-                "guidance_scale": 1.0
+                "resolution": resolution,
+                "frames": frames,
+                "fps": 16,
+                "num_inference_steps": 40,
+                "guidance_scale": 3.5,
             }
             
-            logger.info(f"Animate request ({quality}): {len(image_b64)} chars, {preset}")
+            logger.info(f"Animate request: {resolution}, {frames} frames")
             
             response = await http_client.post(
                 "https://chutes-wan-2-2-i2v-14b-fast.chutes.ai/generate",
@@ -405,7 +407,7 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         video_data.name = "animated_video.mp4"
                         await update.message.reply_video(
                             video=video_data,
-                            caption=f"🎬 *{prompt}*\n{quality_emoji} {quality.capitalize()}",
+                            caption=f"🎬 *{prompt}* | {resolution}",
                             parse_mode="Markdown"
                         )
                     else:
@@ -419,7 +421,7 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     video_data.name = "animated_video.mp4"
                     await update.message.reply_video(
                         video=video_data,
-                        caption=f"🎬 *{prompt}*\n{quality_emoji} {quality.capitalize()}",
+                        caption=f"🎬 *{prompt}* | {resolution}",
                         parse_mode="Markdown"
                     )
             else:
@@ -443,75 +445,93 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 # ==================== LTX VIDEO COMMANDS ====================
 
-# LTX-2 Quality Presets
-LTX_QUALITY_PRESETS = {
-    "fast": {"height": 512, "width": 768, "num_frames": 81, "steps": 40, "distilled": True},
-    "balanced": {"height": 768, "width": 1280, "num_frames": 121, "steps": 50, "distilled": True},
-    "hq": {"height": 768, "width": 1280, "num_frames": 161, "steps": 60, "distilled": False},
-    "max": {"height": 1088, "width": 1920, "num_frames": 161, "steps": 80, "distilled": False}
-}
-
 async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /video command for LTX text-to-video generation with quality presets."""
+    """Handle /video command for LTX text-to-video generation (LTX-2)."""
     chat_id = update.effective_chat.id
+    
+    # Resolution presets
+    RES_MAP = {
+        "sd": (768, 512),
+        "hd": (1280, 720),
+        "fhd": (1920, 1088),
+    }
     
     # Get the prompt from command arguments
     if not context.args:
         await update.message.reply_text(
             "🎬 To generate a video from text, use:\n"
-            "`/video [quality] <prompt>`\n\n"
-            "**Quality presets:**\n"
-            "⚡ `fast` - 768×512, 81 frames, distilled\n"
-            "⚖️ `balanced` - 1280×768, 121 frames (default)\n"
-            "🎨 `hq` - 1280×768, 161 frames, TWO_STAGE\n"
-            "💎 `max` - 1920×1088, 161 frames, TWO_STAGE\n\n"
-            "Example: `/video hq a sunset over the ocean`",
+            "`/video [res=X] [steps=X] [mode=X] <prompt>`\n\n"
+            "**Options:**\n"
+            "📐 `res=` sd, hd (default), fhd\n"
+            "🔢 `steps=` 20-60 (default: 40)\n"
+            "⚙️ `mode=` distilled (default), full\n\n"
+            "**Examples:**\n"
+            "`/video a sunset over the ocean`\n"
+            "`/video res=fhd a cinematic landscape`\n"
+            "`/video steps=60 mode=full detailed scene`",
             parse_mode="Markdown"
         )
         return
     
-    # Check if first arg is a quality preset
     args = list(context.args)
-    quality = "balanced"  # default
-    if args[0].lower() in LTX_QUALITY_PRESETS:
-        quality = args[0].lower()
-        args = args[1:]
+    width, height = 1280, 720  # default hd
+    steps = 40
+    distilled = True
+    
+    # Parse optional parameters
+    new_args = []
+    for arg in args:
+        if arg.lower().startswith("res="):
+            res_key = arg[4:].lower()
+            if res_key in RES_MAP:
+                width, height = RES_MAP[res_key]
+        elif arg.lower().startswith("steps="):
+            try:
+                steps = max(20, min(60, int(arg[6:])))
+            except ValueError:
+                pass
+        elif arg.lower().startswith("mode="):
+            mode = arg[5:].lower()
+            distilled = mode != "full"
+        else:
+            new_args.append(arg)
+    args = new_args
     
     if not args:
-        await update.message.reply_text("Please provide a prompt after the quality preset.")
+        await update.message.reply_text("Please provide a prompt.")
         return
     
     prompt = " ".join(args)
-    preset = LTX_QUALITY_PRESETS[quality]
-    quality_emoji = {"fast": "⚡", "balanced": "⚖️", "hq": "🎨", "max": "💎"}[quality]
+    mode_str = "Distilled" if distilled else "Full"
     
     # Show typing action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
     await update.message.reply_text(
-        f"🎬 Generating video: *{prompt}*\n"
-        f"{quality_emoji} Quality: {quality} ({preset['width']}×{preset['height']}, {preset['num_frames']} frames)\n\n"
+        f"🎬 Generating: *{prompt}*\n"
+        f"📐 {width}×{height} | Steps: {steps} | Mode: {mode_str}\n\n"
         f"⏳ This may take 3-8 minutes...",
         parse_mode="Markdown"
     )
     
     try:
         # Call LTX-2 Text-to-Video API
+        import random
         async with httpx.AsyncClient(timeout=600.0) as http_client:
             request_body = {
                 "prompt": prompt,
-                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, shaky camera, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts, blurry, pixelated",
-                "height": preset["height"],
-                "width": preset["width"],
-                "num_frames": preset["num_frames"],
-                "frame_rate": 30,
-                "num_inference_steps": preset["steps"],
-                "cfg_guidance_scale": 4.0,
-                "seed": 42,
-                "distilled": preset["distilled"],
-                "enhance_prompt": True
+                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, shaky camera, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts",
+                "height": height,
+                "width": width,
+                "num_frames": 121,
+                "frame_rate": 25.0,
+                "num_inference_steps": steps,
+                "cfg_guidance_scale": 3.0,
+                "seed": random.randint(1, 2**32 - 1),
+                "distilled": distilled,
+                "enhance_prompt": False,
             }
             
-            logger.info(f"LTX T2V request ({quality}): {prompt[:50]}...")
+            logger.info(f"LTX T2V request: {prompt[:50]}...")
             
             response = await http_client.post(
                 "https://chutes-ltx-2.chutes.ai/generate",
@@ -547,7 +567,7 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         video_data.name = "generated_video.mp4"
                         await update.message.reply_video(
                             video=video_data,
-                            caption=f"🎬 *{prompt}*\n{quality_emoji} {quality.capitalize()}",
+                            caption=f"🎬 *{prompt}*",
                             parse_mode="Markdown"
                         )
                     else:
@@ -560,7 +580,7 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     video_data.name = "generated_video.mp4"
                     await update.message.reply_video(
                         video=video_data,
-                        caption=f"🎬 *{prompt}*\n{quality_emoji} {quality.capitalize()}",
+                        caption=f"🎬 *{prompt}*",
                         parse_mode="Markdown"
                     )
             else:
@@ -575,6 +595,7 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("😔 Something went wrong. Please try again later.")
 
 
+
 # Camera LoRAs for cinematic effects
 CAMERA_LORAS = [
     "camera-dolly-in",
@@ -583,6 +604,7 @@ CAMERA_LORAS = [
     "camera-dolly-right",
     "camera-jib-up",
     "camera-jib-down",
+    "camera-static",
 ]
 
 async def video_cinematic_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -590,47 +612,87 @@ async def video_cinematic_command(update: Update, context: ContextTypes.DEFAULT_
     import random
     chat_id = update.effective_chat.id
     
+    # Resolution presets
+    RES_MAP = {
+        "sd": (768, 512),
+        "hd": (1280, 720),
+        "fhd": (1920, 1088),
+    }
+    
     # Get the prompt from command arguments
     if not context.args:
         await update.message.reply_text(
-            "🎥 To generate a cinematic video with camera movement, use:\n"
-            "`/video_cinematic <your prompt>`\n\n"
-            "Example: `/video_cinematic a majestic mountain landscape`\n\n"
-            "Camera movements: dolly-in, dolly-out, dolly-left, dolly-right, jib-up, jib-down",
+            "🎥 To generate a cinematic video, use:\n"
+            "`/video_cinematic [cam=X] [res=X] <prompt>`\n\n"
+            "**Camera options:**\n"
+            "🎯 dolly-in, dolly-out, dolly-left, dolly-right\n"
+            "⬆️ jib-up, jib-down, static, random (default)\n\n"
+            "**Resolution:** sd, hd (default), fhd\n\n"
+            "**Examples:**\n"
+            "`/video_cinematic a majestic mountain`\n"
+            "`/video_cinematic cam=dolly-in a beautiful sunset`\n"
+            "`/video_cinematic res=fhd cam=jib-up epic landscape`",
             parse_mode="Markdown"
         )
         return
     
-    prompt = " ".join(context.args)
+    args = list(context.args)
+    width, height = 1280, 720  # default hd
+    camera_lora = "random"
     
-    # Pick a random camera movement
-    camera_lora = random.choice(CAMERA_LORAS)
+    # Parse optional parameters
+    new_args = []
+    for arg in args:
+        if arg.lower().startswith("cam="):
+            cam = arg[4:].lower()
+            if cam in ["dolly-in", "dolly-out", "dolly-left", "dolly-right", "jib-up", "jib-down", "static"]:
+                camera_lora = f"camera-{cam}"
+            elif cam == "random":
+                camera_lora = "random"
+        elif arg.lower().startswith("res="):
+            res_key = arg[4:].lower()
+            if res_key in RES_MAP:
+                width, height = RES_MAP[res_key]
+        else:
+            new_args.append(arg)
+    args = new_args
+    
+    if not args:
+        await update.message.reply_text("Please provide a prompt.")
+        return
+    
+    prompt = " ".join(args)
+    
+    # Pick random camera if requested
+    if camera_lora == "random":
+        camera_lora = random.choice(CAMERA_LORAS)
+    
     camera_name = camera_lora.replace("camera-", "").replace("-", " ").title()
     
     # Show typing action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
     await update.message.reply_text(
-        f"🎥 Generating cinematic video: *{prompt}*\n"
-        f"📷 Camera: *{camera_name}*\n\n"
-        f"⏳ This may take 8-12 minutes (high quality)...",
+        f"🎥 Generating: *{prompt}*\n"
+        f"📷 Camera: *{camera_name}* | 📐 {width}×{height}\n\n"
+        f"⏳ This may take 5-10 minutes...",
         parse_mode="Markdown"
     )
     
     try:
         # Call LTX-2 with camera LoRA
-        async with httpx.AsyncClient(timeout=600.0) as http_client:  # 10 min timeout
+        async with httpx.AsyncClient(timeout=600.0) as http_client:
             request_body = {
                 "prompt": prompt,
-                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts, blurry, pixelated",
-                "height": 1088,
-                "width": 1920,
-                "num_frames": 161,
-                "frame_rate": 30,
-                "num_inference_steps": 80,
-                "cfg_guidance_scale": 4.0,
-                "seed": random.randint(1, 1000000),
-                "distilled": False,
-                "enhance_prompt": True,
+                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts",
+                "height": height,
+                "width": width,
+                "num_frames": 121,
+                "frame_rate": 25.0,
+                "num_inference_steps": 40,
+                "cfg_guidance_scale": 3.0,
+                "seed": random.randint(1, 2**32 - 1),
+                "distilled": False,  # Use full model for better LoRA results
+                "enhance_prompt": False,
                 "loras": [
                     {"name": camera_lora, "strength": 1.0}
                 ]
@@ -696,45 +758,51 @@ async def video_cinematic_command(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /ltxanimate command for LTX image-to-video with quality presets."""
+    """Handle /ltxanimate command for LTX image-to-video (LTX-2)."""
     chat_id = update.effective_chat.id
     
     # Check if user has an image stored
     if chat_id not in user_images:
         await update.message.reply_text(
             "📷 To animate with LTX, first send me a photo, then use:\n"
-            "`/ltxanimate [quality] <motion description>`\n\n"
-            "**Quality presets:**\n"
-            "⚡ `fast` - 768×512, 81 frames, distilled\n"
-            "⚖️ `balanced` - 1280×768, 121 frames (default)\n"
-            "🎨 `hq` - 1280×768, 161 frames, TWO_STAGE\n"
-            "💎 `max` - 1920×1088, 161 frames, TWO_STAGE\n\n"
-            "Example: `/ltxanimate hq camera slowly zooms in`",
+            "`/ltxanimate [steps=X] <motion description>`\n\n"
+            "**Options:**\n"
+            "🔢 `steps=` 30 (fast), 50 (balanced), 80 (high)\n\n"
+            "**Examples:**\n"
+            "`/ltxanimate gentle camera movement`\n"
+            "`/ltxanimate steps=80 slow zoom with bokeh`",
             parse_mode="Markdown"
         )
         return
     
-    # Check if first arg is a quality preset
     args = list(context.args) if context.args else []
-    quality = "balanced"  # default
-    if args and args[0].lower() in LTX_QUALITY_PRESETS:
-        quality = args[0].lower()
-        args = args[1:]
+    steps = 50  # default balanced
+    
+    # Parse optional parameters
+    new_args = []
+    for arg in args:
+        if arg.lower().startswith("steps="):
+            try:
+                steps = max(30, min(80, int(arg[6:])))
+            except ValueError:
+                pass
+        else:
+            new_args.append(arg)
+    args = new_args
     
     prompt = " ".join(args) if args else "gentle camera movement"
-    preset = LTX_QUALITY_PRESETS[quality]
-    quality_emoji = {"fast": "⚡", "balanced": "⚖️", "hq": "🎨", "max": "💎"}[quality]
     
     # Show typing action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
     await update.message.reply_text(
         f"🎬 LTX Animating: *{prompt}*\n"
-        f"{quality_emoji} Quality: {quality} ({preset['width']}×{preset['height']}, {preset['num_frames']} frames)\n\n"
-        f"⏳ This may take 3-8 minutes...",
+        f"🔢 Steps: {steps}\n\n"
+        f"⏳ This may take 2-8 minutes...",
         parse_mode="Markdown"
     )
     
     try:
+        import random
         # Get raw base64 image
         image_b64 = user_images[chat_id]
         
@@ -742,21 +810,21 @@ async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         async with httpx.AsyncClient(timeout=600.0) as http_client:
             request_body = {
                 "prompt": prompt,
-                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, shaky camera, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts, blurry, pixelated",
+                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, shaky camera, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts",
                 "image_b64": image_b64,
                 "image_strength": 1.0,
-                "height": preset["height"],
-                "width": preset["width"],
-                "num_frames": preset["num_frames"],
-                "frame_rate": 30,
-                "num_inference_steps": preset["steps"],
-                "cfg_guidance_scale": 4.0,
-                "seed": 42,
-                "distilled": preset["distilled"],
-                "enhance_prompt": True
+                "height": 512,
+                "width": 768,
+                "num_frames": 121,
+                "frame_rate": 25.0,
+                "num_inference_steps": steps,
+                "cfg_guidance_scale": 3.0,
+                "seed": random.randint(1, 2**32 - 1),
+                "distilled": True,
+                "enhance_prompt": False
             }
             
-            logger.info(f"LTX I2V request ({quality}): {len(image_b64)} chars")
+            logger.info(f"LTX I2V request: steps={steps}")
             
             response = await http_client.post(
                 "https://chutes-ltx-2.chutes.ai/generate",
@@ -792,7 +860,7 @@ async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         video_data.name = "ltx_animated.mp4"
                         await update.message.reply_video(
                             video=video_data,
-                            caption=f"🎬 LTX: *{prompt}*\n{quality_emoji} {quality.capitalize()}",
+                            caption=f"🎬 LTX: *{prompt}*",
                             parse_mode="Markdown"
                         )
                     else:
@@ -805,7 +873,7 @@ async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     video_data.name = "ltx_animated.mp4"
                     await update.message.reply_video(
                         video=video_data,
-                        caption=f"🎬 LTX: *{prompt}*\n{quality_emoji} {quality.capitalize()}",
+                        caption=f"🎬 LTX: *{prompt}*",
                         parse_mode="Markdown"
                     )
             else:
@@ -854,15 +922,19 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /edit command for image editing."""
+    """Handle /edit command for image editing (Qwen Image Edit)."""
     chat_id = update.effective_chat.id
     
     # Check if user has an image stored
     if chat_id not in user_images:
         await update.message.reply_text(
             "📷 To edit an image, first send me a photo, then use:\n"
-            "`/edit <your prompt>`\n\n"
-            "Example: Send a photo, then `/edit make it look like a painting`",
+            "`/edit [width height] [cfg=X] [steps=X] <prompt>`\n\n"
+            "**Examples:**\n"
+            "`/edit make it look like a painting`\n"
+            "`/edit 1920 1080 transform to anime`\n"
+            "`/edit cfg=6 steps=60 add dramatic lighting`\n\n"
+            "Default: 1328×1328, cfg=4, steps=40",
             parse_mode="Markdown"
         )
         return
@@ -871,21 +943,60 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not context.args:
         await update.message.reply_text(
             "✨ To edit your image, use:\n"
-            "`/edit <your prompt>`\n\n"
+            "`/edit [width height] [cfg=X] [steps=X] <prompt>`\n\n"
             "Example: `/edit add sunglasses`",
             parse_mode="Markdown"
         )
         return
     
-    prompt = " ".join(context.args)
+    args = list(context.args)
+    width = 1328  # default
+    height = 1328  # default
+    cfg_scale = 4  # default
+    steps = 40  # default
+    negative_prompt = ""
+    
+    # Check if first two args are dimensions
+    if len(args) >= 3 and args[0].isdigit() and args[1].isdigit():
+        width = max(256, min(2048, int(args[0])))
+        height = max(256, min(2048, int(args[1])))
+        args = args[2:]
+    
+    # Check for cfg=X and steps=X parameters
+    new_args = []
+    for arg in args:
+        if arg.lower().startswith("cfg="):
+            try:
+                cfg_scale = max(1, min(10, int(float(arg[4:]))))
+            except ValueError:
+                pass
+        elif arg.lower().startswith("steps="):
+            try:
+                steps = max(10, min(100, int(arg[6:])))
+            except ValueError:
+                pass
+        elif arg.lower().startswith("neg="):
+            negative_prompt = arg[4:]
+        else:
+            new_args.append(arg)
+    args = new_args
+    
+    if not args:
+        await update.message.reply_text("Please provide a prompt.")
+        return
+    
+    prompt = " ".join(args)
     
     # Show upload photo action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
-    await update.message.reply_text(f"🎨 Editing your image: *{prompt}*\n\nThis may take a moment...", parse_mode="Markdown")
+    await update.message.reply_text(
+        f"🎨 Editing: *{prompt}*\n📐 Size: {width}×{height} | CFG: {cfg_scale} | Steps: {steps}",
+        parse_mode="Markdown"
+    )
     
     try:
         # Call Chutes Qwen Image Edit API
-        async with httpx.AsyncClient(timeout=120.0) as http_client:
+        async with httpx.AsyncClient(timeout=180.0) as http_client:
             response = await http_client.post(
                 "https://chutes-qwen-image-edit-2511.chutes.ai/generate",
                 headers={
@@ -894,13 +1005,13 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 },
                 json={
                     "seed": None,
-                    "width": 1024,
-                    "height": 1024,
+                    "width": width,
+                    "height": height,
                     "prompt": prompt,
                     "image_b64s": [user_images[chat_id]],
-                    "true_cfg_scale": 4,
-                    "negative_prompt": "",
-                    "num_inference_steps": 40
+                    "true_cfg_scale": cfg_scale,
+                    "negative_prompt": negative_prompt,
+                    "num_inference_steps": steps
                 }
             )
             
@@ -974,6 +1085,8 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
 
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming text messages."""
     chat_id = update.effective_chat.id
@@ -1024,13 +1137,13 @@ def main() -> None:
         await application.bot.set_my_commands([
             ("start", "Start the bot"),
             ("clear", "Clear conversation history"),
-            ("generate", "Generate image (fast)"),
-            ("imagine", "Generate image (HQ Qwen)"),
-            ("edit", "Edit your uploaded image"),
-            ("animate", "Animate image to video (WAN 2.2)"),
-            ("video", "Generate video from text (LTX)"),
-            ("video_cinematic", "Cinematic video with camera movement"),
-            ("ltxanimate", "Animate image to video (LTX)"),
+            ("generate", "Generate image [w h]"),
+            ("imagine", "HQ Image [w h] [cfg]"),
+            ("edit", "Edit Image [w h] [cfg] [steps]"),
+            ("video", "Text-to-Video [res] [steps] [mode]"),
+            ("video_cinematic", "Cinematic Video [cam] [res]"),
+            ("animate", "Animate Image [res] [frames]"),
+            ("ltxanimate", "LTX Animate Image [steps]"),
         ])
     
     application.post_init = post_init
