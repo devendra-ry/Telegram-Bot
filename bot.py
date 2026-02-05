@@ -8,6 +8,7 @@ import io
 import base64
 import logging
 import httpx
+import random
 import threading
 from flask import Flask
 from collections import defaultdict
@@ -58,13 +59,96 @@ CAMERA_LORAS = [
     "camera-static"
 ]
 
-# User uploaded images: {chat_id: image_b64}
 # User uploaded images: {chat_id: [list of image_b64 strings]}
-user_images = {}
+user_images: dict[int, list[str]] = {}
 
-# Maximum messages to keep in history (to avoid token limits)
-# MAX_HISTORY = 40
+# API Endpoints
+API_URLS = {
+    "z_image": "https://chutes-z-image-turbo.chutes.ai/generate",
+    "qwen_image": "https://chutes-qwen-image-2512.chutes.ai/generate",
+    "qwen_edit": "https://chutes-qwen-image-edit-2511.chutes.ai/generate",
+    "wan_i2v": "https://chutes-wan-2-2-i2v-14b-fast.chutes.ai/generate",
+    "ltx": "https://chutes-ltx-2.chutes.ai/generate",
+    "hunyuan": "https://chutes-hunyuan-image-3.chutes.ai/generate",
+}
 
+
+def parse_params(args: list[str], defaults: dict) -> tuple[dict, list[str]]:
+    """
+    Parse key=value parameters from command arguments.
+    
+    Returns:
+        tuple: (parsed_params dict, remaining args list)
+    """
+    params = defaults.copy()
+    remaining = []
+    
+    for arg in args:
+        if "=" in arg:
+            key, _, value = arg.partition("=")
+            key = key.lower()
+            if key in params:
+                # Try to cast to the same type as default
+                default_val = defaults[key]
+                try:
+                    if isinstance(default_val, bool):
+                        params[key] = value.lower() in ("true", "1", "yes")
+                    elif isinstance(default_val, int):
+                        params[key] = int(value)
+                    elif isinstance(default_val, float):
+                        params[key] = float(value)
+                    else:
+                        params[key] = value
+                except ValueError:
+                    pass  # Keep default if conversion fails
+        else:
+            remaining.append(arg)
+    
+    return params, remaining
+
+
+async def call_api(
+    endpoint: str,
+    payload: dict,
+    timeout: float = 120.0
+) -> httpx.Response:
+    """
+    Make authenticated API call to Chutes.
+    
+    Args:
+        endpoint: API endpoint URL
+        payload: Request body as dict
+        timeout: Request timeout in seconds
+    
+    Returns:
+        httpx.Response object
+    """
+    async with httpx.AsyncClient(timeout=timeout) as http_client:
+        return await http_client.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {CHUTES_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json=payload
+        )
+
+
+def parse_api_error(response: httpx.Response) -> str:
+    """Parse API error response and return a user-friendly message."""
+    try:
+        json_data = response.json()
+        # Try common error message fields
+        for key in ['error', 'message', 'detail', 'error_message', 'msg']:
+            if key in json_data:
+                val = json_data[key]
+                if isinstance(val, str):
+                    return val[:200]  # Truncate long messages
+                elif isinstance(val, dict) and 'message' in val:
+                    return val['message'][:200]
+        return f"Error {response.status_code}"
+    except Exception:
+        return f"Error {response.status_code}"
 
 async def get_ai_response(chat_id: int, user_message: str) -> str:
     """Get AI response from Chutes API with conversation history (async)."""
@@ -84,10 +168,9 @@ async def get_ai_response(chat_id: int, user_message: str) -> str:
     
     try:
         response = await client.chat.completions.create(
-            model="moonshotai/Kimi-K2-Thinking-TEE",
+            model="moonshotai/Kimi-K2.5-TEE",
             messages=messages,
-            max_tokens=1024,
-            temperature=0.8
+            temperature=1.0
         )
         
         assistant_message = response.choices[0].message.content
@@ -165,33 +248,30 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     try:
         # Call Chutes Image API (Z-Image Turbo)
-        async with httpx.AsyncClient(timeout=120.0) as http_client:
-            response = await http_client.post(
-                "https://chutes-z-image-turbo.chutes.ai/generate",
-                headers={
-                    "Authorization": f"Bearer {CHUTES_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "prompt": prompt,
-                    "height": height,
-                    "width": width,
-                    "num_inference_steps": 9,
-                    "guidance_scale": 0.0,
-                    "shift": 3.0
-                }
+        response = await call_api(
+            API_URLS["z_image"],
+            {
+                "prompt": prompt,
+                "height": height,
+                "width": width,
+                "num_inference_steps": 9,
+                "guidance_scale": 0.0,
+                "shift": 3.0
+            },
+            timeout=120.0
+        )
+        
+        if response.status_code == 200:
+            # Send the generated image
+            image_data = io.BytesIO(response.content)
+            image_data.name = "generated_image.png"
+            await update.message.reply_photo(photo=image_data)
+        else:
+            logger.error(f"Image generation failed: {response.status_code}")
+            error_msg = parse_api_error(response)
+            await update.message.reply_text(
+                f"😔 I couldn't generate that image. {error_msg}"
             )
-            
-            if response.status_code == 200:
-                # Send the generated image
-                image_data = io.BytesIO(response.content)
-                image_data.name = "generated_image.png"
-                await update.message.reply_photo(photo=image_data)
-            else:
-                logger.error(f"Image generation failed: {response.status_code} - {response.text}")
-                await update.message.reply_text(
-                    "😔 I couldn't generate that image right now. Please try again with a different prompt."
-                )
                 
     except httpx.TimeoutException:
         await update.message.reply_text(
@@ -260,37 +340,30 @@ async def imagine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     try:
         # Call Qwen-Image-2512 API
-        async with httpx.AsyncClient(timeout=180.0) as http_client:
-            request_body = {
-                "prompt": prompt,
-                "negative_prompt": negative_prompt,
-                "height": height,
-                "width": width,
-                "num_inference_steps": 50,
-                "true_cfg_scale": cfg_scale
-            }
-            
-            logger.info(f"Imagine request: {prompt[:50]}...")
-            
-            response = await http_client.post(
-                "https://chutes-qwen-image-2512.chutes.ai/generate",
-                headers={
-                    "Authorization": f"Bearer {CHUTES_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json=request_body
+        request_body = {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "height": height,
+            "width": width,
+            "num_inference_steps": 50,
+            "true_cfg_scale": cfg_scale
+        }
+        
+        logger.info("Imagine request started")
+        
+        response = await call_api(API_URLS["qwen_image"], request_body, timeout=180.0)
+        
+        if response.status_code == 200:
+            # Send the generated image
+            image_data = io.BytesIO(response.content)
+            image_data.name = "imagine.jpg"
+            await update.message.reply_photo(photo=image_data)
+        else:
+            logger.error(f"Imagine failed: {response.status_code}")
+            error_msg = parse_api_error(response)
+            await update.message.reply_text(
+                f"😔 Image generation failed. {error_msg}"
             )
-            
-            if response.status_code == 200:
-                # Send the generated image
-                image_data = io.BytesIO(response.content)
-                image_data.name = "imagine.jpg"
-                await update.message.reply_photo(photo=image_data)
-            else:
-                logger.error(f"Imagine failed: {response.status_code} - {response.text[:300]}")
-                await update.message.reply_text(
-                    f"😔 Image generation failed. Error: {response.status_code}"
-                )
                 
     except httpx.TimeoutException:
         await update.message.reply_text(
@@ -301,6 +374,75 @@ async def imagine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(
             "😔 Something went wrong. Please try again later."
         )
+
+
+async def dream_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /dream command for Hunyuan Image 3.0 generation."""
+    chat_id = update.effective_chat.id
+    
+    if not context.args:
+        await update.message.reply_text(
+            "✨ To generate an image with Hunyuan 3.0, use:\n"
+            "`/dream [width height] [steps=X] [seed=X] <prompt>`\n\n"
+            "**Examples:**\n"
+            "`/dream a beautiful sunset`\n"
+            "`/dream 1280 768 steps=30 a futuristic city`\n\n"
+            "Default: 1024×1024, steps=20",
+            parse_mode="Markdown"
+        )
+        return
+
+    args = list(context.args)
+    defaults = {
+        "steps": 20,
+        "seed": None,
+        "size": "1024x1024"
+    }
+    
+    # Special handling for dimensions as first two args
+    if len(args) >= 3 and args[0].isdigit() and args[1].isdigit():
+        defaults["size"] = f"{args[0]}x{args[1]}"
+        args = args[2:]
+        
+    params, prompt_args = parse_params(args, defaults)
+    
+    if not prompt_args:
+        await update.message.reply_text("Please provide a prompt.")
+        return
+        
+    prompt = " ".join(prompt_args)
+    
+    # Show typing action
+    await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+    
+    try:
+        request_body = {
+            "prompt": prompt,
+            "size": params["size"],
+            "steps": params["steps"],
+            "seed": params["seed"]
+        }
+        
+        logger.info(f"Dream request started: {params['size']}")
+        
+        response = await call_api(API_URLS["hunyuan"], request_body, timeout=180.0)
+        
+        if response.status_code == 200:
+            # Send the generated image
+            image_data = io.BytesIO(response.content)
+            image_data.name = "dream.png"
+            await update.message.reply_photo(photo=image_data)
+        else:
+            logger.error(f"Dream failed: {response.status_code}")
+            error_msg = parse_api_error(response)
+            await update.message.reply_text(f"😔 Dream failed. {error_msg}")
+            
+    except httpx.TimeoutException:
+        await update.message.reply_text("⏳ Dream generation timed out. Please try again.")
+    except Exception as e:
+        logger.error(f"Dream error: {e}")
+        await update.message.reply_text("😔 Something went wrong. Please try again later.")
+
 
 
 
@@ -348,84 +490,70 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Get raw base64 image (use latest)
         image_b64 = user_images[chat_id][-1]
         
-        # Call WAN 2.2 Image-to-Video API (10 min timeout for high frame counts)
-        async with httpx.AsyncClient(timeout=600.0) as http_client:
-            request_body = {
-                "seed": None,
-                "image": image_b64,
-                "prompt": prompt,
-                "negative_prompt": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
-            }
-            
-            # Configure API parameters to match WAN 2.2 specification
-            request_body["resolution"] = "720p"
-            request_body["frames"] = frames
-            request_body["fps"] = 16  # WAN 2.2 14B native frame rate
-            request_body["fast"] = False  # Standard quality mode (9 inference steps)
-            request_body["guidance_scale"] = 1.0  # API default
-            request_body["guidance_scale_2"] = 1.0  # API default
+        # Build request body
+        request_body = {
+            "seed": None,
+            "image": image_b64,
+            "prompt": prompt,
+            "negative_prompt": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+            "resolution": "720p",
+            "frames": frames,
+            "fps": 16,
+            "fast": False,
+            "guidance_scale": 1.0,
+            "guidance_scale_2": 1.0
+        }
 
-            logger.info(f"Animate request (image length: {len(image_b64)} chars)")
-            
-            response = await http_client.post(
-                "https://chutes-wan-2-2-i2v-14b-fast.chutes.ai/generate",
-                headers={
-                    "Authorization": f"Bearer {CHUTES_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json=request_body
-            )
-            
-            logger.info(f"Animate response status: {response.status_code}")
-            
-            if response.status_code == 200:
-                # Try to parse as JSON (might contain base64 video)
-                try:
-                    json_response = response.json()
-                    logger.info(f"Animate response keys: {json_response.keys() if isinstance(json_response, dict) else type(json_response)}")
-                    
-                    # Look for video data in response
-                    video_b64 = None
-                    for key in ['video', 'video_b64', 'output', 'result', 'data', 'generated_video']:
-                        if key in json_response:
-                            val = json_response[key]
-                            if isinstance(val, str):
-                                video_b64 = val
-                                break
-                            elif isinstance(val, list) and len(val) > 0:
-                                video_b64 = val[0]
-                                break
-                    
-                    if video_b64:
-                        video_bytes = base64.b64decode(video_b64)
-                        video_data = io.BytesIO(video_bytes)
-                        video_data.name = "animated_video.mp4"
-                        await message.reply_video(video=video_data)
-                    else:
-                        logger.error(f"Could not find video in JSON: {json_response}")
-                        await message.reply_text("😔 Unexpected response format from the API.")
-                        
-                except Exception:
-                    # Raw video bytes
-                    logger.info("Response is raw video bytes")
-                    video_data = io.BytesIO(response.content)
+        logger.info(f"Animate request (image length: {len(image_b64)} chars)")
+        
+        response = await call_api(API_URLS["wan_i2v"], request_body, timeout=600.0)
+        
+        logger.info(f"Animate response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            # Try to parse as JSON (might contain base64 video)
+            try:
+                json_response = response.json()
+                logger.info(f"Animate response keys: {json_response.keys() if isinstance(json_response, dict) else type(json_response)}")
+                
+                # Look for video data in response
+                video_b64 = None
+                for key in ['video', 'video_b64', 'output', 'result', 'data', 'generated_video']:
+                    if key in json_response:
+                        val = json_response[key]
+                        if isinstance(val, str):
+                            video_b64 = val
+                            break
+                        elif isinstance(val, list) and len(val) > 0:
+                            video_b64 = val[0]
+                            break
+                
+                if video_b64:
+                    video_bytes = base64.b64decode(video_b64)
+                    video_data = io.BytesIO(video_bytes)
                     video_data.name = "animated_video.mp4"
                     await message.reply_video(video=video_data)
-            else:
-                error_text = response.text[:500] if len(response.text) > 500 else response.text
-                logger.error(f"Animation failed: {response.status_code} - {error_text}")
-                await message.reply_text(
-                    f"😔 Animation failed. Error: {response.status_code}\n{error_text[:200]}"
-                )
+                else:
+                    logger.error("Could not find video in JSON response")
+                    await message.reply_text("😔 Unexpected response format from the API.")
+                    
+            except Exception:
+                # Raw video bytes
+                logger.info("Response is raw video bytes")
+                video_data = io.BytesIO(response.content)
+                video_data.name = "animated_video.mp4"
+                await message.reply_video(video=video_data)
+        else:
+            logger.error(f"Animation failed: {response.status_code}")
+            error_msg = parse_api_error(response)
+            await message.reply_text(f"😔 Animation failed. {error_msg}")
                 
     except httpx.TimeoutException:
         await message.reply_text(
             "⏳ The animation is taking too long. Please try again."
         )
     except Exception as e:
-        logger.error(f"Animation error: {type(e).__name__}: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"Animation error: {type(e).__name__}")
         await message.reply_text(
             f"😔 Animation error: {type(e).__name__}: {str(e)[:200]}"
         )
@@ -512,44 +640,35 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     try:
         # Call LTX-2 Text-to-Video API
-        import random
-        async with httpx.AsyncClient(timeout=600.0) as http_client:
-            request_body = {
-                "prompt": prompt,
-                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, shaky camera, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts",
-                "height": height,
-                "width": width,
-                "num_frames": frames,
-                "frame_rate": fps,
-                "num_inference_steps": steps,
-                "cfg_guidance_scale": 3.0,
-                "seed": random.randint(1, 2**32 - 1),
-                "distilled": distilled,
-                "enhance_prompt": False,
-            }
-            
-            logger.info(f"LTX T2V request: {prompt[:50]}...")
-            
-            response = await http_client.post(
-                "https://chutes-ltx-2.chutes.ai/generate",
-                headers={
-                    "Authorization": f"Bearer {CHUTES_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json=request_body
-            )
-            
-            logger.info(f"LTX T2V response status: {response.status_code}")
-            
-            if response.status_code == 200:
-                # LTX-2 returns raw video/mp4 content directly
-                video_data = io.BytesIO(response.content)
-                video_data.name = "generated_video.mp4"
-                await update.message.reply_video(video=video_data)
-            else:
-                error_text = response.text[:300]
-                logger.error(f"LTX T2V failed: {response.status_code} - {error_text}")
-                await update.message.reply_text(f"😔 Video generation failed. Error: {response.status_code}")
+        request_body = {
+            "prompt": prompt,
+            "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, shaky camera, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts",
+            "height": height,
+            "width": width,
+            "num_frames": frames,
+            "frame_rate": fps,
+            "num_inference_steps": steps,
+            "cfg_guidance_scale": 3.0,
+            "seed": random.randint(1, 2**32 - 1),
+            "distilled": distilled,
+            "enhance_prompt": False,
+        }
+        
+        logger.info("LTX T2V request started")
+        
+        response = await call_api(API_URLS["ltx"], request_body, timeout=600.0)
+        
+        logger.info(f"LTX T2V response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            # LTX-2 returns raw video/mp4 content directly
+            video_data = io.BytesIO(response.content)
+            video_data.name = "generated_video.mp4"
+            await update.message.reply_video(video=video_data)
+        else:
+            logger.error(f"LTX T2V failed: {response.status_code}")
+            error_msg = parse_api_error(response)
+            await update.message.reply_text(f"😔 Video generation failed. {error_msg}")
                 
     except httpx.TimeoutException:
         await update.message.reply_text("⏳ Video generation timed out. Please try again.")
@@ -557,22 +676,8 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"LTX T2V error: {e}")
         await update.message.reply_text("😔 Something went wrong. Please try again later.")
 
-
-
-# Camera LoRAs for cinematic effects
-CAMERA_LORAS = [
-    "camera-dolly-in",
-    "camera-dolly-out",
-    "camera-dolly-left",
-    "camera-dolly-right",
-    "camera-jib-up",
-    "camera-jib-down",
-    "camera-static",
-]
-
 async def video_cinematic_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /video_cinematic command for cinematic video with camera movements."""
-    import random
     chat_id = update.effective_chat.id
     
     # Get the prompt from command arguments
@@ -643,46 +748,38 @@ async def video_cinematic_command(update: Update, context: ContextTypes.DEFAULT_
     
     try:
         # Call LTX-2 with camera LoRA
-        async with httpx.AsyncClient(timeout=600.0) as http_client:
-            request_body = {
-                "prompt": prompt,
-                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts",
-                "height": height,
-                "width": width,
-                "num_frames": frames,
-                "frame_rate": fps,
-                "num_inference_steps": 40,
-                "cfg_guidance_scale": 3.0,
-                "seed": random.randint(1, 2**32 - 1),
-                "distilled": False,  # Use full model for better LoRA results
-                "enhance_prompt": False,
-                "loras": [
-                    {"name": camera_lora, "strength": 1.0}
-                ]
-            }
-            
-            logger.info(f"Cinematic request with {camera_lora}: {prompt[:50]}...")
-            
-            response = await http_client.post(
-                "https://chutes-ltx-2.chutes.ai/generate",
-                headers={
-                    "Authorization": f"Bearer {CHUTES_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json=request_body
-            )
-            
-            logger.info(f"Cinematic response status: {response.status_code}")
-            
-            if response.status_code == 200:
-                # LTX-2 returns raw video/mp4 content directly
-                video_data = io.BytesIO(response.content)
-                video_data.name = "cinematic_video.mp4"
-                await update.message.reply_video(video=video_data)
-            else:
-                error_text = response.text[:300]
-                logger.error(f"Cinematic failed: {response.status_code} - {error_text}")
-                await update.message.reply_text(f"😔 Video generation failed. Error: {response.status_code}")
+        request_body = {
+            "prompt": prompt,
+            "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts",
+            "height": height,
+            "width": width,
+            "num_frames": frames,
+            "frame_rate": fps,
+            "num_inference_steps": 40,
+            "cfg_guidance_scale": 3.0,
+            "seed": random.randint(1, 2**32 - 1),
+            "distilled": False,
+            "enhance_prompt": False,
+            "loras": [
+                {"name": camera_lora, "strength": 1.0}
+            ]
+        }
+        
+        logger.info(f"Cinematic request with {camera_lora}")
+        
+        response = await call_api(API_URLS["ltx"], request_body, timeout=600.0)
+        
+        logger.info(f"Cinematic response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            # LTX-2 returns raw video/mp4 content directly
+            video_data = io.BytesIO(response.content)
+            video_data.name = "cinematic_video.mp4"
+            await update.message.reply_video(video=video_data)
+        else:
+            logger.error(f"Cinematic failed: {response.status_code}")
+            error_msg = parse_api_error(response)
+            await update.message.reply_text(f"😔 Video generation failed. {error_msg}")
                 
     except httpx.TimeoutException:
         await update.message.reply_text("⏳ Video generation timed out. Please try again.")
@@ -730,50 +827,41 @@ async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
     
     try:
-        import random
         # Get raw base64 image (use latest)
         image_b64 = user_images[chat_id][-1]
         
-        # Call LTX-2 Image-to-Video API
-        async with httpx.AsyncClient(timeout=600.0) as http_client:
-            request_body = {
-                "prompt": prompt,
-                "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, shaky camera, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts",
-                "image_b64": image_b64,
-                "image_strength": 1.0,
-                "height": 512,
-                "width": 768,
-                "num_frames": 121,
-                "frame_rate": 25.0,
-                "num_inference_steps": steps,
-                "cfg_guidance_scale": 3.0,
-                "seed": random.randint(1, 2**32 - 1),
-                "distilled": False,  # Full mode default
-                "enhance_prompt": False
-            }
-            
-            logger.info(f"LTX I2V request: steps={steps}")
-            
-            response = await http_client.post(
-                "https://chutes-ltx-2.chutes.ai/generate",
-                headers={
-                    "Authorization": f"Bearer {CHUTES_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json=request_body
-            )
-            
-            logger.info(f"LTX I2V response status: {response.status_code}")
-            
-            if response.status_code == 200:
-                # LTX-2 returns raw video/mp4 content directly
-                video_data = io.BytesIO(response.content)
-                video_data.name = "ltx_animated.mp4"
-                await update.message.reply_video(video=video_data)
-            else:
-                error_text = response.text[:300]
-                logger.error(f"LTX I2V failed: {response.status_code} - {error_text}")
-                await update.message.reply_text(f"😔 Animation failed. Error: {response.status_code}")
+        # Build request body
+        request_body = {
+            "prompt": prompt,
+            "negative_prompt": "low-res, morphing, distortion, warping, flicker, jitter, stutter, shaky camera, erratic motion, temporal artifacts, frame blending, low quality, jpeg artifacts",
+            "image_b64": image_b64,
+            "image_strength": 1.0,
+            "height": 512,
+            "width": 768,
+            "num_frames": 121,
+            "frame_rate": 25.0,
+            "num_inference_steps": steps,
+            "cfg_guidance_scale": 3.0,
+            "seed": random.randint(1, 2**32 - 1),
+            "distilled": False,
+            "enhance_prompt": False
+        }
+        
+        logger.info(f"LTX I2V request: steps={steps}")
+        
+        response = await call_api(API_URLS["ltx"], request_body, timeout=600.0)
+        
+        logger.info(f"LTX I2V response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            # LTX-2 returns raw video/mp4 content directly
+            video_data = io.BytesIO(response.content)
+            video_data.name = "ltx_animated.mp4"
+            await update.message.reply_video(video=video_data)
+        else:
+            logger.error(f"LTX I2V failed: {response.status_code}")
+            error_msg = parse_api_error(response)
+            await update.message.reply_text(f"😔 Animation failed. {error_msg}")
                 
     except httpx.TimeoutException:
         await update.message.reply_text("⏳ Animation timed out. Please try again.")
@@ -897,75 +985,68 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     try:
         # Call Chutes Qwen Image Edit API
-        async with httpx.AsyncClient(timeout=180.0) as http_client:
-            response = await http_client.post(
-                "https://chutes-qwen-image-edit-2511.chutes.ai/generate",
-                headers={
-                    "Authorization": f"Bearer {CHUTES_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "seed": None,
-                    "width": width,
-                    "height": height,
-                    "prompt": prompt,
-                    "image_b64s": [user_images[chat_id][-1]],  # Use latest image
-                    "true_cfg_scale": cfg_scale,
-                    "negative_prompt": negative_prompt,
-                    "num_inference_steps": steps
-                }
-            )
-            
-            if response.status_code == 200:
-                # Try to parse as JSON first (API may return base64 in JSON)
-                try:
-                    json_response = response.json()
-                    logger.info(f"Image edit JSON response keys: {json_response.keys() if isinstance(json_response, dict) else type(json_response)}")
-                    
-                    # Handle different possible JSON response formats
-                    if isinstance(json_response, dict):
-                        # Try common keys for base64 image data
-                        image_b64 = None
-                        for key in ['image', 'images', 'output', 'result', 'data', 'image_b64', 'generated_image']:
-                            if key in json_response:
-                                val = json_response[key]
-                                if isinstance(val, str):
-                                    image_b64 = val
-                                    break
-                                elif isinstance(val, list) and len(val) > 0:
-                                    image_b64 = val[0]
-                                    break
-                        
-                        if image_b64:
-                            # Decode base64 to bytes
-                            image_bytes = base64.b64decode(image_b64)
-                            image_data = io.BytesIO(image_bytes)
-                            image_data.name = "edited_image.png"
-                            await update.message.reply_photo(photo=image_data)
-                            # Replace stored images with the edited result
-                            user_images[chat_id] = [image_b64]
-                        else:
-                            logger.error(f"Could not find image in JSON response: {json_response}")
-                            await update.message.reply_text("😔 Unexpected response format from the API.")
-                    else:
-                        logger.error(f"Unexpected JSON type: {type(json_response)}")
-                        await update.message.reply_text("😔 Unexpected response format from the API.")
-                        
-                except Exception as json_err:
-                    # Not JSON, try as raw image bytes
-                    logger.info(f"Response is not JSON, treating as raw image. Error: {json_err}")
-                    image_data = io.BytesIO(response.content)
-                    image_data.name = "edited_image.png"
-                    await update.message.reply_photo(photo=image_data)
-                    # Store the edited image for further edits
-                    edited_b64 = base64.b64encode(response.content).decode('utf-8')
-                    user_images[chat_id] = [edited_b64]
+        request_body = {
+            "seed": None,
+            "width": width,
+            "height": height,
+            "prompt": prompt,
+            "image_b64s": [user_images[chat_id][-1]],
+            "true_cfg_scale": cfg_scale,
+            "negative_prompt": negative_prompt,
+            "num_inference_steps": steps
+        }
+        
+        response = await call_api(API_URLS["qwen_edit"], request_body, timeout=180.0)
+        
+        if response.status_code == 200:
+            # Try to parse as JSON first (API may return base64 in JSON)
+            try:
+                json_response = response.json()
+                logger.info(f"Image edit JSON response keys: {json_response.keys() if isinstance(json_response, dict) else type(json_response)}")
                 
-            else:
-                logger.error(f"Image edit failed: {response.status_code} - {response.text}")
-                await update.message.reply_text(
-                    f"😔 I couldn't edit that image. Error: {response.status_code}"
-                )
+                # Handle different possible JSON response formats
+                if isinstance(json_response, dict):
+                    # Try common keys for base64 image data
+                    image_b64 = None
+                    for key in ['image', 'images', 'output', 'result', 'data', 'image_b64', 'generated_image']:
+                        if key in json_response:
+                            val = json_response[key]
+                            if isinstance(val, str):
+                                image_b64 = val
+                                break
+                            elif isinstance(val, list) and len(val) > 0:
+                                image_b64 = val[0]
+                                break
+                    
+                    if image_b64:
+                        # Decode base64 to bytes
+                        image_bytes = base64.b64decode(image_b64)
+                        image_data = io.BytesIO(image_bytes)
+                        image_data.name = "edited_image.png"
+                        await update.message.reply_photo(photo=image_data)
+                        # Replace stored images with the edited result
+                        user_images[chat_id] = [image_b64]
+                    else:
+                        logger.error("Could not find image in JSON response")
+                        await update.message.reply_text("😔 Unexpected response format from the API.")
+                else:
+                    logger.error(f"Unexpected JSON type: {type(json_response)}")
+                    await update.message.reply_text("😔 Unexpected response format from the API.")
+                    
+            except Exception as json_err:
+                # Not JSON, try as raw image bytes
+                logger.info("Response is not JSON, treating as raw image")
+                image_data = io.BytesIO(response.content)
+                image_data.name = "edited_image.png"
+                await update.message.reply_photo(photo=image_data)
+                # Store the edited image for further edits
+                edited_b64 = base64.b64encode(response.content).decode('utf-8')
+                user_images[chat_id] = [edited_b64]
+            
+        else:
+            logger.error(f"Image edit failed: {response.status_code}")
+            error_msg = parse_api_error(response)
+            await update.message.reply_text(f"😔 I couldn't edit that image. {error_msg}")
                 
     except httpx.TimeoutException:
         await update.message.reply_text(
@@ -1051,66 +1132,59 @@ async def combine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     try:
         # Call Chutes Qwen Image Edit API with all stored images
-        async with httpx.AsyncClient(timeout=180.0) as http_client:
-            response = await http_client.post(
-                "https://chutes-qwen-image-edit-2511.chutes.ai/generate",
-                headers={
-                    "Authorization": f"Bearer {CHUTES_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "seed": None,
-                    "width": width,
-                    "height": height,
-                    "prompt": prompt,
-                    "image_b64s": user_images[chat_id],  # All stored images
-                    "true_cfg_scale": cfg_scale,
-                    "negative_prompt": negative_prompt,
-                    "num_inference_steps": steps
-                }
-            )
-            
-            if response.status_code == 200:
-                try:
-                    json_response = response.json()
-                    
-                    if isinstance(json_response, dict):
-                        image_b64 = None
-                        for key in ['image', 'images', 'output', 'result', 'data', 'image_b64', 'generated_image']:
-                            if key in json_response:
-                                val = json_response[key]
-                                if isinstance(val, str):
-                                    image_b64 = val
-                                    break
-                                elif isinstance(val, list) and len(val) > 0:
-                                    image_b64 = val[0]
-                                    break
-                        
-                        if image_b64:
-                            image_bytes = base64.b64decode(image_b64)
-                            image_data = io.BytesIO(image_bytes)
-                            image_data.name = "combined_image.png"
-                            await update.message.reply_photo(photo=image_data)
-                            # Replace stored images with the combined result
-                            user_images[chat_id] = [image_b64]
-                        else:
-                            await update.message.reply_text("😔 Could not parse the response.")
-                    else:
-                        await update.message.reply_text("😔 Unexpected response format.")
-                        
-                except Exception:
-                    # Raw image bytes
-                    image_data = io.BytesIO(response.content)
-                    image_data.name = "combined_image.png"
-                    await update.message.reply_photo(photo=image_data)
-                    combined_b64 = base64.b64encode(response.content).decode('utf-8')
-                    user_images[chat_id] = [combined_b64]
+        request_body = {
+            "seed": None,
+            "width": width,
+            "height": height,
+            "prompt": prompt,
+            "image_b64s": user_images[chat_id],
+            "true_cfg_scale": cfg_scale,
+            "negative_prompt": negative_prompt,
+            "num_inference_steps": steps
+        }
+        
+        response = await call_api(API_URLS["qwen_edit"], request_body, timeout=180.0)
+        
+        if response.status_code == 200:
+            try:
+                json_response = response.json()
                 
-            else:
-                logger.error(f"Image combine failed: {response.status_code} - {response.text}")
-                await update.message.reply_text(
-                    f"😔 I couldn't combine those images. Error: {response.status_code}"
-                )
+                if isinstance(json_response, dict):
+                    image_b64 = None
+                    for key in ['image', 'images', 'output', 'result', 'data', 'image_b64', 'generated_image']:
+                        if key in json_response:
+                            val = json_response[key]
+                            if isinstance(val, str):
+                                image_b64 = val
+                                break
+                            elif isinstance(val, list) and len(val) > 0:
+                                image_b64 = val[0]
+                                break
+                    
+                    if image_b64:
+                        image_bytes = base64.b64decode(image_b64)
+                        image_data = io.BytesIO(image_bytes)
+                        image_data.name = "combined_image.png"
+                        await update.message.reply_photo(photo=image_data)
+                        # Replace stored images with the combined result
+                        user_images[chat_id] = [image_b64]
+                    else:
+                        await update.message.reply_text("😔 Could not parse the response.")
+                else:
+                    await update.message.reply_text("😔 Unexpected response format.")
+                    
+            except Exception:
+                # Raw image bytes
+                image_data = io.BytesIO(response.content)
+                image_data.name = "combined_image.png"
+                await update.message.reply_photo(photo=image_data)
+                combined_b64 = base64.b64encode(response.content).decode('utf-8')
+                user_images[chat_id] = [combined_b64]
+            
+        else:
+            logger.error(f"Image combine failed: {response.status_code}")
+            error_msg = parse_api_error(response)
+            await update.message.reply_text(f"😔 I couldn't combine those images. {error_msg}")
                 
     except httpx.TimeoutException:
         await update.message.reply_text(
@@ -1150,8 +1224,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle errors."""
-    logger.error(f"Update {update} caused error {context.error}")
+    """Handle errors with user-friendly messages."""
+    error = context.error
+    logger.error(f"Error occurred: {error}")
+    
+    # Try to send user-friendly message
+    if update and update.effective_message:
+        try:
+            error_name = type(error).__name__
+            
+            # Map common errors to friendly messages
+            if "Timeout" in error_name or "TimeoutError" in error_name:
+                msg = "⏳ The request timed out. Please try again."
+            elif "NetworkError" in error_name or "ConnectionError" in error_name:
+                msg = "🌐 Network error. Please check your connection and try again."
+            elif "BadRequest" in error_name:
+                msg = "❌ Invalid request. Please check your input and try again."
+            elif "Forbidden" in error_name:
+                msg = "🚫 Access denied. The bot may not have permission for this action."
+            elif "Conflict" in error_name:
+                msg = "⚠️ Another request is in progress. Please wait a moment."
+            else:
+                msg = "😔 Something went wrong. Please try again later."
+            
+            await update.effective_message.reply_text(msg)
+        except Exception:
+            pass  # Silently fail if we can't send message
 
 
 def main() -> None:
@@ -1169,6 +1267,7 @@ def main() -> None:
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("generate", generate_command))
     application.add_handler(CommandHandler("imagine", imagine_command))  # Qwen-Image-2512
+    application.add_handler(CommandHandler("dream", dream_command))      # Hunyuan Image 3.0
     application.add_handler(CommandHandler("edit", edit_command))
     application.add_handler(CommandHandler("combine", combine_command))  # Combine multiple images
     application.add_handler(CommandHandler("clearimages", clearimages_command))  # Clear stored images
@@ -1189,6 +1288,7 @@ def main() -> None:
             ("clear", "Clear conversation history"),
             ("generate", "Generate image [w h]"),
             ("imagine", "HQ Image [w h] [cfg]"),
+            ("dream", "Dream Image [w h] [steps]"),
             ("edit", "Edit Image [w h] [cfg] [steps]"),
             ("combine", "Combine 2-5 images [w h] [cfg]"),
             ("clearimages", "Clear stored images"),
@@ -1216,7 +1316,8 @@ def main() -> None:
 
     def run_server():
         port = int(os.environ.get("PORT", 8080))
-        app.run(host="0.0.0.0", port=port)
+        # Disable debug mode and reloader for production
+        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
     # Run server in a separate thread
     threading.Thread(target=run_server, daemon=True).start()
