@@ -162,10 +162,6 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     # Show upload photo action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
-    await update.message.reply_text(
-        f"🎨 Generating: *{prompt}*\n📐 Size: {width}×{height}",
-        parse_mode="Markdown"
-    )
     
     try:
         # Call Chutes Image API (Z-Image Turbo)
@@ -182,8 +178,7 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     "width": width,
                     "num_inference_steps": 9,
                     "guidance_scale": 0.0,
-                    "shift": 3.0,
-                    "max_sequence_length": 512
+                    "shift": 3.0
                 }
             )
             
@@ -191,11 +186,7 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 # Send the generated image
                 image_data = io.BytesIO(response.content)
                 image_data.name = "generated_image.png"
-                await update.message.reply_photo(
-                    photo=image_data,
-                    caption=f"⚡ *{prompt}*",
-                    parse_mode="Markdown"
-                )
+                await update.message.reply_photo(photo=image_data)
             else:
                 logger.error(f"Image generation failed: {response.status_code} - {response.text}")
                 await update.message.reply_text(
@@ -266,10 +257,6 @@ async def imagine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     # Show typing action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
-    await update.message.reply_text(
-        f"🎨 Generating: *{prompt}*\n📐 Size: {width}×{height} | CFG: {cfg_scale}",
-        parse_mode="Markdown"
-    )
     
     try:
         # Call Qwen-Image-2512 API
@@ -298,11 +285,7 @@ async def imagine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 # Send the generated image
                 image_data = io.BytesIO(response.content)
                 image_data.name = "imagine.jpg"
-                await update.message.reply_photo(
-                    photo=image_data,
-                    caption=f"🎨 *{prompt}*",
-                    parse_mode="Markdown"
-                )
+                await update.message.reply_photo(photo=image_data)
             else:
                 logger.error(f"Imagine failed: {response.status_code} - {response.text[:300]}")
                 await update.message.reply_text(
@@ -360,12 +343,6 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     # Show typing action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
-    await message.reply_text(
-        f"🎬 Animating: *{prompt}*\n"
-        f"Frames: {frames}\n\n"
-        f"⏳ This may take 2-5 minutes...",
-        parse_mode="Markdown"
-    )
     
     try:
         # Get raw base64 image (use latest)
@@ -423,11 +400,7 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         video_bytes = base64.b64decode(video_b64)
                         video_data = io.BytesIO(video_bytes)
                         video_data.name = "animated_video.mp4"
-                        await message.reply_video(
-                            video=video_data,
-                            caption=f"🎬 *{prompt}*",
-                            parse_mode="Markdown"
-                        )
+                        await message.reply_video(video=video_data)
                     else:
                         logger.error(f"Could not find video in JSON: {json_response}")
                         await message.reply_text("😔 Unexpected response format from the API.")
@@ -437,11 +410,7 @@ async def animate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     logger.info("Response is raw video bytes")
                     video_data = io.BytesIO(response.content)
                     video_data.name = "animated_video.mp4"
-                    await message.reply_video(
-                        video=video_data,
-                        caption=f"🎬 *{prompt}*",
-                        parse_mode="Markdown"
-                    )
+                    await message.reply_video(video=video_data)
             else:
                 error_text = response.text[:500] if len(response.text) > 500 else response.text
                 logger.error(f"Animation failed: {response.status_code} - {error_text}")
@@ -540,12 +509,6 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # Show typing action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
-    await update.message.reply_text(
-        f"🎬 Generating: *{prompt}*\n"
-        f"📐 {width}×{height} | Steps: {steps} | Mode: {mode_str}\n\n"
-        f"⏳ This may take 3-8 minutes...",
-        parse_mode="Markdown"
-    )
     
     try:
         # Call LTX-2 Text-to-Video API
@@ -582,11 +545,7 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 # LTX-2 returns raw video/mp4 content directly
                 video_data = io.BytesIO(response.content)
                 video_data.name = "generated_video.mp4"
-                await update.message.reply_video(
-                    video=video_data,
-                    caption=f"🎬 *{prompt}*",
-                    parse_mode="Markdown"
-                )
+                await update.message.reply_video(video=video_data)
             else:
                 error_text = response.text[:300]
                 logger.error(f"LTX T2V failed: {response.status_code} - {error_text}")
@@ -681,12 +640,6 @@ async def video_cinematic_command(update: Update, context: ContextTypes.DEFAULT_
     
     # Show typing action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
-    await update.message.reply_text(
-        f"🎥 Generating: *{prompt}*\n"
-        f"📷 Camera: *{camera_name}* | 📐 {width}×{height}\n\n"
-        f"⏳ This may take 5-10 minutes...",
-        parse_mode="Markdown"
-    )
     
     try:
         # Call LTX-2 with camera LoRA
@@ -725,11 +678,7 @@ async def video_cinematic_command(update: Update, context: ContextTypes.DEFAULT_
                 # LTX-2 returns raw video/mp4 content directly
                 video_data = io.BytesIO(response.content)
                 video_data.name = "cinematic_video.mp4"
-                await update.message.reply_video(
-                    video=video_data,
-                    caption=f"🎥 *{prompt}*\n📷 Camera: {camera_name}",
-                    parse_mode="Markdown"
-                )
+                await update.message.reply_video(video=video_data)
             else:
                 error_text = response.text[:300]
                 logger.error(f"Cinematic failed: {response.status_code} - {error_text}")
@@ -779,12 +728,6 @@ async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     # Show typing action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_video")
-    await update.message.reply_text(
-        f"🎬 LTX Animating: *{prompt}*\n"
-        f"🔢 Steps: {steps}\n\n"
-        f"⏳ This may take 2-8 minutes...",
-        parse_mode="Markdown"
-    )
     
     try:
         import random
@@ -826,11 +769,7 @@ async def ltxanimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 # LTX-2 returns raw video/mp4 content directly
                 video_data = io.BytesIO(response.content)
                 video_data.name = "ltx_animated.mp4"
-                await update.message.reply_video(
-                    video=video_data,
-                    caption=f"🎬 LTX: *{prompt}*",
-                    parse_mode="Markdown"
-                )
+                await update.message.reply_video(video=video_data)
             else:
                 error_text = response.text[:300]
                 logger.error(f"LTX I2V failed: {response.status_code} - {error_text}")
@@ -955,10 +894,6 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     # Show upload photo action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
-    await update.message.reply_text(
-        f"🎨 Editing: *{prompt}*\n📐 Size: {width}×{height} | CFG: {cfg_scale} | Steps: {steps}",
-        parse_mode="Markdown"
-    )
     
     try:
         # Call Chutes Qwen Image Edit API
@@ -1006,11 +941,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                             image_bytes = base64.b64decode(image_b64)
                             image_data = io.BytesIO(image_bytes)
                             image_data.name = "edited_image.png"
-                            await update.message.reply_photo(
-                                photo=image_data,
-                                caption=f"✨ Edited: *{prompt}*",
-                                parse_mode="Markdown"
-                            )
+                            await update.message.reply_photo(photo=image_data)
                             # Replace stored images with the edited result
                             user_images[chat_id] = [image_b64]
                         else:
@@ -1025,11 +956,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     logger.info(f"Response is not JSON, treating as raw image. Error: {json_err}")
                     image_data = io.BytesIO(response.content)
                     image_data.name = "edited_image.png"
-                    await update.message.reply_photo(
-                        photo=image_data,
-                        caption=f"✨ Edited: *{prompt}*",
-                        parse_mode="Markdown"
-                    )
+                    await update.message.reply_photo(photo=image_data)
                     # Store the edited image for further edits
                     edited_b64 = base64.b64encode(response.content).decode('utf-8')
                     user_images[chat_id] = [edited_b64]
@@ -1121,10 +1048,6 @@ async def combine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     # Show upload photo action
     await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
-    await update.message.reply_text(
-        f"🎨 Combining {count} images: *{prompt}*\n📐 Size: {width}×{height} | CFG: {cfg_scale} | Steps: {steps}",
-        parse_mode="Markdown"
-    )
     
     try:
         # Call Chutes Qwen Image Edit API with all stored images
@@ -1167,11 +1090,7 @@ async def combine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                             image_bytes = base64.b64decode(image_b64)
                             image_data = io.BytesIO(image_bytes)
                             image_data.name = "combined_image.png"
-                            await update.message.reply_photo(
-                                photo=image_data,
-                                caption=f"✨ Combined: *{prompt}*",
-                                parse_mode="Markdown"
-                            )
+                            await update.message.reply_photo(photo=image_data)
                             # Replace stored images with the combined result
                             user_images[chat_id] = [image_b64]
                         else:
@@ -1183,11 +1102,7 @@ async def combine_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     # Raw image bytes
                     image_data = io.BytesIO(response.content)
                     image_data.name = "combined_image.png"
-                    await update.message.reply_photo(
-                        photo=image_data,
-                        caption=f"✨ Combined: *{prompt}*",
-                        parse_mode="Markdown"
-                    )
+                    await update.message.reply_photo(photo=image_data)
                     combined_b64 = base64.b64encode(response.content).decode('utf-8')
                     user_images[chat_id] = [combined_b64]
                 
