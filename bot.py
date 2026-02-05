@@ -383,18 +383,19 @@ async def dream_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not context.args:
         await update.message.reply_text(
             "✨ To generate an image with Hunyuan 3.0, use:\n"
-            "`/dream [width height] [steps=X] [seed=X] <prompt>`\n\n"
+            "`/dream [width height] [steps=X] [cfg=X] [seed=X] <prompt>`\n\n"
             "**Examples:**\n"
             "`/dream a beautiful sunset`\n"
             "`/dream 1280 768 steps=30 a futuristic city`\n\n"
-            "Default: 1024×1024, steps=20",
+            "Default: 1024×1024, steps=50, cfg=7.5",
             parse_mode="Markdown"
         )
         return
 
     args = list(context.args)
     defaults = {
-        "steps": 20,
+        "steps": 50,
+        "cfg": 7.5,
         "seed": None,
         "size": "1024x1024"
     }
@@ -420,10 +421,11 @@ async def dream_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "prompt": prompt,
             "size": params["size"],
             "steps": params["steps"],
+            "guidance_scale": params["cfg"],
             "seed": params["seed"]
         }
         
-        logger.info(f"Dream request started: {params['size']}")
+        logger.info(f"Dream request started: {params['size']} (steps={params['steps']}, cfg={params['cfg']})")
         
         response = await call_api(API_URLS["hunyuan"], request_body, timeout=180.0)
         
