@@ -1,51 +1,15 @@
 from collections.abc import Awaitable, Callable
+import asyncio
+import threading
 
 import httpx
-from openai import AsyncOpenAI
+from google import genai
+from google.genai import types
 
-from assistant_bot.config import (
-    AI_MODEL,
-    CHUTES_API_KEY,
-    CHUTES_BASE_URL,
-    MAX_HISTORY,
-    TELEGRAM_TOKEN,
-    logger,
-)
+from assistant_bot.config import GEMINI_API_KEY, GEMINI_MODEL, MAX_HISTORY, TELEGRAM_TOKEN, logger
 from assistant_bot.state import conversation_history
 
-client = AsyncOpenAI(api_key=CHUTES_API_KEY, base_url=CHUTES_BASE_URL)
-
-
-async def call_api(endpoint: str, payload: dict, timeout: float = 120.0) -> httpx.Response:
-    """Make authenticated API call to Chutes."""
-    async with httpx.AsyncClient(timeout=timeout) as http_client:
-        return await http_client.post(
-            endpoint,
-            headers={
-                "Authorization": f"Bearer {CHUTES_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-
-
-def parse_api_error(response: httpx.Response) -> str:
-    """Parse API error response and return a user-friendly message."""
-    try:
-        json_data = response.json()
-        for key in ["error", "message", "detail", "error_message", "msg"]:
-            if key not in json_data:
-                continue
-
-            val = json_data[key]
-            if isinstance(val, str):
-                return val[:200]
-            if isinstance(val, dict) and "message" in val:
-                return str(val["message"])[:200]
-
-        return f"Error {response.status_code}"
-    except Exception:
-        return f"Error {response.status_code}"
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
 def _trim_history(chat_id: int) -> None:
@@ -53,30 +17,65 @@ def _trim_history(chat_id: int) -> None:
         conversation_history[chat_id] = conversation_history[chat_id][-MAX_HISTORY:]
 
 
-async def _complete_chat(messages: list[dict[str, str]]) -> str:
-    response = await client.chat.completions.create(
-        model=AI_MODEL,
-        messages=messages,
-        temperature=1.0,
+def _build_prompt(chat_id: int) -> str:
+    lines = ["You are a concise and helpful assistant."]
+    for message in conversation_history[chat_id]:
+        role = message.get("role", "user")
+        content = message.get("content", "")
+        prefix = "User" if role == "user" else "Assistant"
+        lines.append(f"{prefix}: {content}")
+    lines.append("Assistant:")
+    return "\n".join(lines)
+
+
+def _stream_gemini_sync(prompt: str, callback: Callable[[str], None]) -> str:
+    if client is None:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+
+    contents = [
+        types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=prompt)],
+        )
+    ]
+
+    tools = [types.Tool(googleSearch=types.GoogleSearch())]
+    config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
+        tools=tools,
     )
-    text = response.choices[0].message.content or ""
-    return text
+
+    chunks: list[str] = []
+    for chunk in client.models.generate_content_stream(
+        model=GEMINI_MODEL,
+        contents=contents,
+        config=config,
+    ):
+        text = getattr(chunk, "text", None)
+        if not text:
+            continue
+        chunks.append(text)
+        callback("".join(chunks))
+
+    return "".join(chunks).strip()
 
 
-async def get_ai_response(chat_id: int, user_message: str) -> str:
-    """Get AI response from Chutes API with conversation history."""
-    conversation_history[chat_id].append({"role": "user", "content": user_message})
-    _trim_history(chat_id)
+def _generate_gemini_sync(prompt: str) -> str:
+    if client is None:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
 
-    messages = conversation_history[chat_id]
+    tools = [types.Tool(googleSearch=types.GoogleSearch())]
+    config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
+        tools=tools,
+    )
 
-    try:
-        assistant_message = await _complete_chat(messages)
-        conversation_history[chat_id].append({"role": "assistant", "content": assistant_message})
-        return assistant_message
-    except Exception as exc:
-        logger.error(f"Chutes API error: {exc}")
-        return "I apologize, I'm experiencing a brief interruption. Could you please try again in a moment?"
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+        config=config,
+    )
+    return (getattr(response, "text", "") or "").strip()
 
 
 async def get_ai_response_with_stream(
@@ -84,47 +83,58 @@ async def get_ai_response_with_stream(
     user_message: str,
     on_partial: Callable[[str], Awaitable[None]] | None = None,
 ) -> str:
-    """Get AI response while emitting partial text chunks as they are generated."""
+    """Get AI response from Gemini with streamed partial text updates."""
     conversation_history[chat_id].append({"role": "user", "content": user_message})
     _trim_history(chat_id)
 
-    messages = conversation_history[chat_id]
-    chunks: list[str] = []
+    prompt = _build_prompt(chat_id)
 
-    try:
-        stream = await client.chat.completions.create(
-            model=AI_MODEL,
-            messages=messages,
-            temperature=1.0,
-            stream=True,
-        )
+    if client is None:
+        return "GEMINI_API_KEY is not configured. Please set it in your environment."
 
-        async for chunk in stream:
-            choice = chunk.choices[0] if chunk.choices else None
-            delta = getattr(choice, "delta", None)
-            token = getattr(delta, "content", None) if delta else None
-            if not token:
-                continue
+    queue: asyncio.Queue[str | object] = asyncio.Queue()
+    done = object()
+    loop = asyncio.get_running_loop()
 
-            chunks.append(token)
-            if on_partial is not None:
-                await on_partial("".join(chunks))
+    result_text = ""
+    error: Exception | None = None
 
-        assistant_message = "".join(chunks).strip()
-        if not assistant_message:
-            assistant_message = await _complete_chat(messages)
+    def worker() -> None:
+        nonlocal result_text, error
 
-        conversation_history[chat_id].append({"role": "assistant", "content": assistant_message})
-        return assistant_message
-    except Exception as exc:
-        logger.error(f"Streaming Chutes API error: {exc}")
+        def push_partial(text: str) -> None:
+            asyncio.run_coroutine_threadsafe(queue.put(text), loop)
+
         try:
-            assistant_message = await _complete_chat(messages)
-            conversation_history[chat_id].append({"role": "assistant", "content": assistant_message})
-            return assistant_message
-        except Exception as inner_exc:
-            logger.error(f"Chutes API fallback error: {inner_exc}")
-            return "I apologize, I'm experiencing a brief interruption. Could you please try again in a moment?"
+            result_text = _stream_gemini_sync(prompt, push_partial)
+        except Exception as exc:
+            error = exc
+        finally:
+            asyncio.run_coroutine_threadsafe(queue.put(done), loop)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    while True:
+        item = await queue.get()
+        if item is done:
+            break
+        if on_partial is not None and isinstance(item, str):
+            await on_partial(item)
+
+    if error is not None:
+        logger.error("Gemini stream error: %s", error)
+        try:
+            result_text = await asyncio.to_thread(_generate_gemini_sync, prompt)
+        except Exception as fallback_error:
+            logger.error("Gemini fallback error: %s", fallback_error)
+            return "I hit an error while generating a response. Please try again."
+
+    if not result_text:
+        result_text = "I could not generate a response. Please try again."
+
+    conversation_history[chat_id].append({"role": "assistant", "content": result_text})
+    _trim_history(chat_id)
+    return result_text
 
 
 async def send_message_draft(
@@ -133,7 +143,7 @@ async def send_message_draft(
     text: str,
     message_thread_id: int | None = None,
 ) -> bool:
-    """Send/refresh a Telegram draft message for streaming bot output."""
+    """Send or refresh a Telegram draft message for streaming bot output."""
     if not TELEGRAM_TOKEN or not text:
         return False
 

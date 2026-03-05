@@ -1,6 +1,5 @@
 python-telegram-bot[all]>=22.6
-openai>=1.0.0
+google-genai>=1.11.0
 python-dotenv>=1.0.0
 httpx>=0.25.0
 flask>=3.0.0
-

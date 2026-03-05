@@ -5,31 +5,22 @@ from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-from assistant_bot.config import CHUTES_API_KEY, TELEGRAM_TOKEN, logger
+from assistant_bot.config import GEMINI_API_KEY, TELEGRAM_TOKEN, logger
 from assistant_bot.handlers import (
-    animate_command,
     clear_command,
-    clearimages_command,
-    combine_command,
-    dream_command,
-    edit_command,
     error_handler,
-    generate_command,
     handle_message,
     handle_photo,
-    imagine_command,
-    ltxanimate_command,
+    media_disabled_command,
     start_command,
-    video_cinematic_command,
-    video_command,
 )
 
 
 def validate_config() -> None:
     if not TELEGRAM_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN not found in .env file!")
-    if not CHUTES_API_KEY:
-        raise ValueError("CHUTES_API_KEY not found in .env file!")
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY not found in .env file!")
 
 
 def build_application() -> Application:
@@ -37,16 +28,22 @@ def build_application() -> Application:
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("clear", clear_command))
-    application.add_handler(CommandHandler("generate", generate_command))
-    application.add_handler(CommandHandler("imagine", imagine_command))
-    application.add_handler(CommandHandler("dream", dream_command))
-    application.add_handler(CommandHandler("edit", edit_command))
-    application.add_handler(CommandHandler("combine", combine_command))
-    application.add_handler(CommandHandler("clearimages", clearimages_command))
-    application.add_handler(CommandHandler("animate", animate_command))
-    application.add_handler(CommandHandler("video", video_command))
-    application.add_handler(CommandHandler("video_cinematic", video_cinematic_command))
-    application.add_handler(CommandHandler("ltxanimate", ltxanimate_command))
+
+    # Legacy media commands are intentionally disabled during migration.
+    for command in [
+        "generate",
+        "imagine",
+        "dream",
+        "edit",
+        "combine",
+        "clearimages",
+        "animate",
+        "video",
+        "video_cinematic",
+        "ltxanimate",
+    ]:
+        application.add_handler(CommandHandler(command, media_disabled_command))
+
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
@@ -56,16 +53,6 @@ def build_application() -> Application:
             [
                 ("start", "Start the bot"),
                 ("clear", "Clear conversation history"),
-                ("generate", "Generate image [w h]"),
-                ("imagine", "HQ Image [w h] [cfg]"),
-                ("dream", "Dream Image [w h] [steps]"),
-                ("edit", "Edit Image [w h] [cfg] [steps]"),
-                ("combine", "Combine 2-5 images [w h] [cfg]"),
-                ("clearimages", "Clear stored images"),
-                ("video", "Text-to-Video [res] [steps] [mode]"),
-                ("video_cinematic", "Cinematic Video [cam] [res]"),
-                ("animate", "Animate Image [frames]"),
-                ("ltxanimate", "LTX Animate Image [steps]"),
             ]
         )
 
@@ -97,4 +84,3 @@ def main() -> None:
     logger.info("Assistant Bot is online and ready.")
     start_health_server()
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
