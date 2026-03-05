@@ -1,18 +1,68 @@
-# Environment variables
+# Secrets and local environment
 .env
+.env.*
+!.env.example
+*.pem
+*.key
 
-# Python
+# Python bytecode/cache
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Native extensions
 *.so
-.Python
+*.pyd
+
+# Virtual environments
+.venv/
 venv/
 env/
-.venv/
+ENV/
 
-# IDE
+# Packaging/build artifacts
+.Python
+build/
+dist/
+site/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Test and coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Type-checking/lint caches
+.mypy_cache/
+.pyre/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs and runtime files
+*.log
+*.pid
+*.pid.lock
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors/IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
+
+# Local SQLite/DB files
+*.db
+*.sqlite
+*.sqlite3
+
+# Optional docs in progress
+# IMPROVEMENTS.md
