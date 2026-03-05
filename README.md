@@ -57,7 +57,7 @@ Create or update `.env`:
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 GEMINI_API_KEY=your_gemini_api_key
 # Optional:
-# GEMINI_MODEL=gemini-3.1-flash-lite-preview
+# GEMINI_MODEL=gemini-3-flash-preview
 # PORT=8080
 ```
 
@@ -89,3 +89,4 @@ python bot.py
 
 - Set `PORT` if your host requires a specific port.
 - Polling mode is used (`application.run_polling`).
+
