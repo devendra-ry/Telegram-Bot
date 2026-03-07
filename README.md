@@ -1,92 +1,61 @@
-# Assistant Bot (Telegram)
+# Assistant Bot (Telegram) - NestJS + Telegraf + Vercel
 
-A Telegram bot that uses Google Gemini for text chat and supports Telegram draft streaming updates during response generation.
+A Telegram bot built with NestJS and Telegraf, deployed as Vercel serverless functions using Telegram webhooks.
 
-## Features
+## Stack
 
-- Text chat with Gemini (`google-genai`)
-- Streaming partial output via Telegram `sendMessageDraft` (private chats)
-- Conversation history per chat (in-memory)
-- Health endpoints via Flask (`/`, `/healthz`)
-
-## Current Scope
-
-Enabled:
-- `/start`
-- `/clear`
-- Normal text messages
-
-Disabled (intentional during migration from Chutes):
-- `/generate`
-- `/imagine`
-- `/dream`
-- `/edit`
-- `/combine`
-- `/clearimages`
-- `/animate`
-- `/video`
-- `/video_cinematic`
-- `/ltxanimate`
+- NestJS (`@nestjs/core`, `@nestjs/common`)
+- Telegraf via `nestjs-telegraf`
+- Vercel serverless route for webhook ingestion (`/api/telegram`)
+- Gemini REST API for LLM responses
 
 ## Project Structure
 
-- `bot.py` - Entry point
-- `assistant_bot/app.py` - Telegram app/bootstrap and handler registration
-- `assistant_bot/handlers.py` - Command/message handlers
-- `assistant_bot/services.py` - Gemini generation + Telegram draft API calls
-- `assistant_bot/config.py` - Environment/config values
-- `assistant_bot/state.py` - In-memory conversation state
-
-## Requirements
-
-- Python 3.10+
-- Telegram Bot API token
-- Gemini API key
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
+- `api/telegram.ts` - Vercel webhook endpoint, forwards updates into Nest app context
+- `api/index.ts` - Status endpoint
+- `api/healthz.ts` - Health endpoint
+- `src/app.module.ts` - Nest module + Telegraf module wiring
+- `src/telegram.update.ts` - Telegraf update handlers (`/start`, `/clear`, text)
+- `src/telegram-webhook.service.ts` - Injected bot wrapper for `handleUpdate`
+- `src/gemini.service.ts` - Gemini integration
+- `src/conversation-state.service.ts` - In-memory history store
+- `src/app-config.service.ts` - Environment-backed config service
 
 ## Environment Variables
 
-Create or update `.env`:
+Set in Vercel Project Settings:
 
 ```env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 GEMINI_API_KEY=your_gemini_api_key
-# Optional:
-# GEMINI_MODEL=gemini-3-flash-preview
-# PORT=8080
+GEMINI_MODEL=gemini-2.0-flash
+TELEGRAM_WEBHOOK_SECRET=your_random_secret
+MAX_HISTORY=20
 ```
 
-## Run
+## Local Validation
 
 ```bash
-python bot.py
+npm install
+npm run check
 ```
 
-## How Streaming Works
+## Deploy on Vercel
 
-- Bot streams Gemini output in chunks.
-- In private chats, chunks are pushed using `sendMessageDraft`.
-- Final full response is still sent as a normal Telegram message.
-- If draft updates fail, bot falls back to final message only.
+1. Push repo to GitHub.
+2. Import project in Vercel.
+3. Set environment variables.
+4. Deploy.
 
-## Health Endpoints
+Then set Telegram webhook:
 
-- `GET /` -> status text
-- `GET /healthz` -> `OK`
+```bash
+curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+  -d "url=https://<your-vercel-domain>/api/telegram" \
+  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+```
 
-## Security Notes
+## Notes
 
-- Never commit `.env`.
-- Rotate keys immediately if exposed.
-- Prefer separate keys per environment (dev/prod).
-
-## Deployment Notes
-
-- Set `PORT` if your host requires a specific port.
-- Polling mode is used (`application.run_polling`).
-
+- This is webhook mode (not polling), suitable for Vercel.
+- Conversation history is in-memory and can reset across cold starts.

@@ -5,43 +5,14 @@
 *.pem
 *.key
 
-# Python bytecode/cache
-__pycache__/
-*.py[cod]
-*$py.class
+# Node / TypeScript
+node_modules/
+.vercel/
+*.tsbuildinfo
 
-# Native extensions
-*.so
-*.pyd
-
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
-
-# Packaging/build artifacts
-.Python
-build/
+# Build artifacts
 dist/
-site/
-*.egg-info/
-.eggs/
-pip-wheel-metadata/
-
-# Test and coverage
-.pytest_cache/
-.coverage
-.coverage.*
-htmlcov/
-
-# Type-checking/lint caches
-.mypy_cache/
-.pyre/
-.ruff_cache/
-
-# Jupyter
-.ipynb_checkpoints/
+build/
 
 # Logs and runtime files
 *.log
@@ -58,11 +29,3 @@ Desktop.ini
 .idea/
 *.swp
 *.swo
-
-# Local SQLite/DB files
-*.db
-*.sqlite
-*.sqlite3
-
-# Optional docs in progress
-# IMPROVEMENTS.md

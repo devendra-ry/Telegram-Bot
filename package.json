@@ -1,0 +1,27 @@
+{
+  "name": "telegram-bot-vercel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.9",
+    "@vercel/node": "^5.3.24",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.16",
+    "@nestjs/core": "^11.1.16",
+    "@nestjs/platform-express": "^11.1.16",
+    "nestjs-telegraf": "^2.9.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "telegraf": "^4.16.3"
+  }
+}
