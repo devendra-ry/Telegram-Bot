@@ -12,6 +12,7 @@ async function getAppContext(): Promise<INestApplicationContext> {
   if (!appContextPromise) {
     appContextPromise = NestFactory.createApplicationContext(AppModule, {
       logger: ["error", "warn", "log"],
+      abortOnError: false,
     });
   }
 
@@ -74,7 +75,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     await webhookService.handleUpdate(update);
     res.status(200).json({ ok: true });
   } catch (error) {
+    const message = (error as Error).message || "Unknown error";
     console.error("Webhook processing failed", error);
-    res.status(200).json({ ok: false, error: (error as Error).message });
+    res.status(200).json({ ok: false, error: message });
   }
 }
