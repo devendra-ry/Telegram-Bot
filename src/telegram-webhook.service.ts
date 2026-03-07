@@ -7,6 +7,7 @@ import type { Update } from "telegraf/types";
 export class TelegramWebhookService implements OnModuleInit {
   private readonly logger = new Logger(TelegramWebhookService.name);
   private readonly seenUpdates = new Map<number, number>();
+  private readonly inFlightUpdates = new Set<number>();
   private static readonly DEDUPE_TTL_MS = 2 * 60 * 1000;
 
   constructor(
@@ -19,6 +20,7 @@ export class TelegramWebhookService implements OnModuleInit {
       await this.bot.telegram.setMyCommands([
         { command: "start", description: "Start the bot" },
         { command: "clear", description: "Clear conversation history" },
+        { command: "ping", description: "Health check command" },
       ]);
     } catch (error) {
       this.logger.warn(`Failed to set bot commands: ${(error as Error).message}`);
@@ -39,13 +41,21 @@ export class TelegramWebhookService implements OnModuleInit {
     this.prune(now);
 
     if (typeof updateId === "number") {
-      const alreadySeen = this.seenUpdates.has(updateId);
-      if (alreadySeen) {
+      if (this.seenUpdates.has(updateId) || this.inFlightUpdates.has(updateId)) {
         return;
       }
-      this.seenUpdates.set(updateId, now);
+      this.inFlightUpdates.add(updateId);
     }
 
-    await this.bot.handleUpdate(update);
+    try {
+      await this.bot.handleUpdate(update);
+      if (typeof updateId === "number") {
+        this.seenUpdates.set(updateId, now);
+      }
+    } finally {
+      if (typeof updateId === "number") {
+        this.inFlightUpdates.delete(updateId);
+      }
+    }
   }
 }

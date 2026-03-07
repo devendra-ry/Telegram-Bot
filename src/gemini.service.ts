@@ -38,6 +38,10 @@ export class GeminiService {
   async generate(chatId: number, userMessage: string): Promise<string> {
     const { geminiApiKey, geminiModel, maxHistory } = this.appConfig.config;
 
+    if (!geminiApiKey) {
+      throw new Error("GEMINI_API_KEY is required");
+    }
+
     this.state.append(chatId, { role: "user", content: userMessage }, maxHistory);
 
     const prompt = this.buildPrompt(chatId);
@@ -53,7 +57,8 @@ export class GeminiService {
     });
 
     if (!response.ok) {
-      throw new Error(`Gemini request failed with status ${response.status}`);
+      const raw = await response.text();
+      throw new Error(`Gemini request failed (${response.status}): ${raw.slice(0, 300)}`);
     }
 
     const data = (await response.json()) as GeminiResponse;

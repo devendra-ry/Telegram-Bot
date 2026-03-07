@@ -11,7 +11,7 @@ let appContextPromise: Promise<INestApplicationContext> | null = null;
 async function getAppContext(): Promise<INestApplicationContext> {
   if (!appContextPromise) {
     appContextPromise = NestFactory.createApplicationContext(AppModule, {
-      logger: ["error", "warn"],
+      logger: ["error", "warn", "log"],
     });
   }
 
@@ -61,9 +61,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
   const update = parseUpdate(req.body);
   if (!update) {
+    console.log("Webhook ignored: invalid update body");
     res.status(200).json({ ok: true, ignored: true });
     return;
   }
+
+  console.log(`Webhook received update_id=${update.update_id}`);
 
   try {
     const appContext = await getAppContext();

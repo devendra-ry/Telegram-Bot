@@ -55,6 +55,11 @@ export class TelegramUpdateHandler {
     await ctx.reply("Conversation history cleared.");
   }
 
+  @Command("ping")
+  async onPing(@Ctx() ctx: Context): Promise<void> {
+    await ctx.reply("pong");
+  }
+
   @On("inline_query")
   async onInlineQuery(@Ctx() ctx: Context): Promise<void> {
     await ctx.answerInlineQuery(
@@ -94,6 +99,7 @@ export class TelegramUpdateHandler {
     const now = Date.now();
     const lastAt = this.lastRequestAt.get(chatId) || 0;
     if (now - lastAt < TelegramUpdateHandler.CHAT_COOLDOWN_MS) {
+      await ctx.reply("Please wait a moment and send again.");
       return;
     }
 
@@ -110,8 +116,14 @@ export class TelegramUpdateHandler {
       const output = await this.gemini.generate(chatId, text);
       await ctx.reply(toTelegramHtml(output), { parse_mode: "HTML" });
     } catch (error) {
-      this.logger.error(`Failed to generate response for chat ${chatId}`, error as Error);
-      await ctx.reply("Something went wrong. Please try again later.");
+      const messageText = (error as Error).message || "Unknown error";
+      this.logger.error(`Failed to generate response for chat ${chatId}: ${messageText}`);
+
+      if (messageText.includes("GEMINI_API_KEY is required")) {
+        await ctx.reply("Server is missing GEMINI_API_KEY. Please configure it in Vercel.");
+      } else {
+        await ctx.reply("Something went wrong. Please try again later.");
+      }
     } finally {
       this.inFlightChats.delete(chatId);
     }
