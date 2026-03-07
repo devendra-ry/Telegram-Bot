@@ -28,28 +28,21 @@ def _build_prompt(chat_id: int) -> str:
     return "\n".join(lines)
 
 
+def _generation_config() -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_level="HIGH"),
+    )
+
+
 def _stream_gemini_sync(prompt: str, callback: Callable[[str], None]) -> str:
     if client is None:
         raise RuntimeError("GEMINI_API_KEY is not configured")
 
-    contents = [
-        types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=prompt)],
-        )
-    ]
-
-    tools = [types.Tool(googleSearch=types.GoogleSearch())]
-    config = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
-        tools=tools,
-    )
-
     chunks: list[str] = []
     for chunk in client.models.generate_content_stream(
         model=GEMINI_MODEL,
-        contents=contents,
-        config=config,
+        contents=prompt,
+        config=_generation_config(),
     ):
         text = getattr(chunk, "text", None)
         if not text:
@@ -64,16 +57,10 @@ def _generate_gemini_sync(prompt: str) -> str:
     if client is None:
         raise RuntimeError("GEMINI_API_KEY is not configured")
 
-    tools = [types.Tool(googleSearch=types.GoogleSearch())]
-    config = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
-        tools=tools,
-    )
-
     response = client.models.generate_content(
         model=GEMINI_MODEL,
-        contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
-        config=config,
+        contents=prompt,
+        config=_generation_config(),
     )
     return (getattr(response, "text", "") or "").strip()
 
