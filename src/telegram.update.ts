@@ -34,10 +34,8 @@ export class TelegramUpdateHandler {
   private readonly logger = new Logger(TelegramUpdateHandler.name);
   private readonly lastRequestAt = new Map<number, number>();
   private readonly inFlightChats = new Set<number>();
-  private readonly inlineLastRequestAt = new Map<number, number>();
   private static readonly CHAT_COOLDOWN_MS = 2500;
-  private static readonly INLINE_COOLDOWN_MS = 1500;
-  private static readonly INLINE_MIN_QUERY_LENGTH = 2;
+  private static readonly INLINE_MIN_QUERY_LENGTH = 1;
 
   constructor(
     private readonly gemini: GeminiService,
@@ -135,7 +133,6 @@ export class TelegramUpdateHandler {
 
     const userId = inlineQuery.from.id;
     const query = inlineQuery.query.trim().replace(/\s+/g, " ");
-    const now = Date.now();
 
     if (query.length < TelegramUpdateHandler.INLINE_MIN_QUERY_LENGTH) {
       await ctx.answerInlineQuery(
@@ -151,24 +148,6 @@ export class TelegramUpdateHandler {
       );
       return;
     }
-
-    const lastAt = this.inlineLastRequestAt.get(userId) || 0;
-    if (now - lastAt < TelegramUpdateHandler.INLINE_COOLDOWN_MS) {
-      await ctx.answerInlineQuery(
-        [
-          this.makeInlineResult({
-            id: `wait-${userId}`,
-            title: "Please wait",
-            description: "Inline request rate limit active.",
-            messageText: "Please wait a second and try again.",
-          }),
-        ],
-        { cache_time: 1, is_personal: true },
-      );
-      return;
-    }
-
-    this.inlineLastRequestAt.set(userId, now);
 
     const commandText = `/ask ${query}`.slice(0, 3800);
     await ctx.answerInlineQuery(
@@ -228,6 +207,17 @@ export class TelegramUpdateHandler {
     }
 
     const text = message.text.trim();
+    const askMatch = text.match(/^\/ask(?:@\w+)?\s*([\s\S]*)$/i);
+    if (askMatch) {
+      const prompt = (askMatch[1] || "").trim();
+      if (!prompt) {
+        await ctx.reply("Usage: /ask <your prompt>");
+        return;
+      }
+      await this.processPrompt(ctx, chatId, prompt);
+      return;
+    }
+
     if (text.startsWith("/")) {
       return;
     }
