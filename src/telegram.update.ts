@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { Ctx, Start, Command, On, Update } from "nestjs-telegraf";
 import type { Context } from "telegraf";
 import { GeminiService } from "./gemini.service.js";
@@ -21,7 +21,9 @@ function toTelegramHtml(text: string): string {
 @Injectable()
 @Update()
 export class TelegramUpdateHandler {
+  private readonly logger = new Logger(TelegramUpdateHandler.name);
   private readonly lastRequestAt = new Map<number, number>();
+  private readonly inFlightChats = new Set<number>();
   private static readonly CHAT_COOLDOWN_MS = 2500;
 
   constructor(
@@ -55,10 +57,23 @@ export class TelegramUpdateHandler {
 
   @On("inline_query")
   async onInlineQuery(@Ctx() ctx: Context): Promise<void> {
-    await ctx.answerInlineQuery([], {
-      cache_time: 2,
-      is_personal: true,
-    });
+    await ctx.answerInlineQuery(
+      [
+        {
+          type: "article",
+          id: "use-private-chat",
+          title: "Use direct chat with bot",
+          description: "Inline generation is disabled to prevent API spam.",
+          input_message_content: {
+            message_text: "Open the bot chat and send your prompt there.",
+          },
+        },
+      ],
+      {
+        cache_time: 30,
+        is_personal: true,
+      },
+    );
   }
 
   @On("text")
@@ -81,15 +96,24 @@ export class TelegramUpdateHandler {
     if (now - lastAt < TelegramUpdateHandler.CHAT_COOLDOWN_MS) {
       return;
     }
-    this.lastRequestAt.set(chatId, now);
 
-    await ctx.sendChatAction("typing");
+    if (this.inFlightChats.has(chatId)) {
+      await ctx.reply("Please wait, I am still generating your previous response.");
+      return;
+    }
+
+    this.lastRequestAt.set(chatId, now);
+    this.inFlightChats.add(chatId);
 
     try {
+      await ctx.sendChatAction("typing");
       const output = await this.gemini.generate(chatId, text);
       await ctx.reply(toTelegramHtml(output), { parse_mode: "HTML" });
-    } catch {
+    } catch (error) {
+      this.logger.error(`Failed to generate response for chat ${chatId}`, error as Error);
       await ctx.reply("Something went wrong. Please try again later.");
+    } finally {
+      this.inFlightChats.delete(chatId);
     }
   }
 }

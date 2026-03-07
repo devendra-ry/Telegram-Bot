@@ -2,6 +2,7 @@ import type { INestApplicationContext } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import "reflect-metadata";
+import type { Update } from "telegraf/types";
 import { AppModule } from "../src/app.module.js";
 import { TelegramWebhookService } from "../src/telegram-webhook.service.js";
 
@@ -17,6 +18,32 @@ async function getAppContext(): Promise<INestApplicationContext> {
   return appContextPromise;
 }
 
+function getSecretHeader(req: VercelRequest): string {
+  const value = req.headers["x-telegram-bot-api-secret-token"];
+  if (Array.isArray(value)) {
+    return value[0] || "";
+  }
+  return value || "";
+}
+
+function parseUpdate(body: unknown): Update | null {
+  try {
+    const data = typeof body === "string" ? JSON.parse(body) : body;
+    if (!data || typeof data !== "object") {
+      return null;
+    }
+
+    const maybeUpdate = data as { update_id?: unknown };
+    if (typeof maybeUpdate.update_id !== "number") {
+      return null;
+    }
+
+    return data as Update;
+  } catch {
+    return null;
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (req.method !== "POST") {
     res.status(405).json({ ok: false, error: "Method not allowed" });
@@ -25,19 +52,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
   const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
   if (expectedSecret) {
-    const incoming = req.headers["x-telegram-bot-api-secret-token"];
+    const incoming = getSecretHeader(req);
     if (incoming !== expectedSecret) {
       res.status(401).json({ ok: false, error: "Unauthorized" });
       return;
     }
   }
 
+  const update = parseUpdate(req.body);
+  if (!update) {
+    res.status(200).json({ ok: true, ignored: true });
+    return;
+  }
+
   try {
     const appContext = await getAppContext();
     const webhookService = appContext.get(TelegramWebhookService);
-    await webhookService.handleUpdate(req.body);
+    await webhookService.handleUpdate(update);
     res.status(200).json({ ok: true });
   } catch (error) {
+    console.error("Webhook processing failed", error);
     res.status(200).json({ ok: false, error: (error as Error).message });
   }
 }
