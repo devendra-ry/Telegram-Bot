@@ -35,16 +35,22 @@ export class GeminiService {
     return lines.join("\n");
   }
 
-  async generate(chatId: number, userMessage: string): Promise<string> {
-    const { geminiApiKey, geminiModel, maxHistory } = this.appConfig.config;
+  private buildInlinePrompt(query: string): string {
+    return [
+      "You are a concise assistant for Telegram inline mode.",
+      "Return a short plain-text answer in at most 450 characters.",
+      "Do not use markdown.",
+      `User query: ${query}`,
+    ].join("\n");
+  }
+
+  private async requestGemini(prompt: string): Promise<string> {
+    const { geminiApiKey, geminiModel } = this.appConfig.config;
 
     if (!geminiApiKey) {
       throw new Error("GEMINI_API_KEY is required");
     }
 
-    this.state.append(chatId, { role: "user", content: userMessage }, maxHistory);
-
-    const prompt = this.buildPrompt(chatId);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
 
     const response = await fetch(url, {
@@ -62,13 +68,28 @@ export class GeminiService {
     }
 
     const data = (await response.json()) as GeminiResponse;
-    const output =
+    return (
       data.candidates?.[0]?.content?.parts
         ?.map((part) => part.text || "")
         .join("")
-        .trim() || "I could not generate a response. Please try again.";
+        .trim() || "I could not generate a response. Please try again."
+    );
+  }
+
+  async generate(chatId: number, userMessage: string): Promise<string> {
+    const { maxHistory } = this.appConfig.config;
+
+    this.state.append(chatId, { role: "user", content: userMessage }, maxHistory);
+
+    const prompt = this.buildPrompt(chatId);
+    const output = await this.requestGemini(prompt);
 
     this.state.append(chatId, { role: "assistant", content: output }, maxHistory);
     return output;
+  }
+
+  async generateInline(query: string): Promise<string> {
+    const prompt = this.buildInlinePrompt(query);
+    return this.requestGemini(prompt);
   }
 }
