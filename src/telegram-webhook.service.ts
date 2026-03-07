@@ -19,6 +19,7 @@ export class TelegramWebhookService implements OnModuleInit {
     try {
       await this.bot.telegram.setMyCommands([
         { command: "start", description: "Start the bot" },
+        { command: "ask", description: "Ask Zara in current chat" },
         { command: "clear", description: "Clear conversation history" },
         { command: "ping", description: "Health check command" },
       ]);

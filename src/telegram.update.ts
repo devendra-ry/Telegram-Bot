@@ -35,13 +35,9 @@ export class TelegramUpdateHandler {
   private readonly lastRequestAt = new Map<number, number>();
   private readonly inFlightChats = new Set<number>();
   private readonly inlineLastRequestAt = new Map<number, number>();
-  private readonly inlineInFlightUsers = new Set<number>();
-  private readonly inlineCache = new Map<string, { text: string; expiresAt: number }>();
   private static readonly CHAT_COOLDOWN_MS = 2500;
-  private static readonly INLINE_COOLDOWN_MS = 3000;
-  private static readonly INLINE_CACHE_TTL_MS = 60_000;
-  private static readonly INLINE_TIMEOUT_MS = 4500;
-  private static readonly INLINE_MIN_QUERY_LENGTH = 6;
+  private static readonly INLINE_COOLDOWN_MS = 1500;
+  private static readonly INLINE_MIN_QUERY_LENGTH = 2;
 
   constructor(
     private readonly gemini: GeminiService,
@@ -57,7 +53,7 @@ export class TelegramUpdateHandler {
 
     this.state.clearHistory(chatId);
     await ctx.reply(
-      "Hello.\n\nThis bot uses Google Gemini for text responses. Use /clear to reset conversation history.",
+      "Hello.\n\nUse /ask <your prompt> anywhere I am present, or chat directly with me.\nUse /clear to reset conversation history.",
     );
   }
 
@@ -77,13 +73,40 @@ export class TelegramUpdateHandler {
     await ctx.reply("pong");
   }
 
+  private extractAskPrompt(ctx: Context): string {
+    const message = ctx.message;
+    if (!message || !("text" in message)) {
+      return "";
+    }
+
+    const text = message.text.trim();
+    const match = text.match(/^\/ask(?:@\w+)?\s*([\s\S]*)$/i);
+    return (match?.[1] || "").trim();
+  }
+
+  @Command("ask")
+  async onAsk(@Ctx() ctx: Context): Promise<void> {
+    const chatId = ctx.chat?.id;
+    if (!chatId) {
+      return;
+    }
+
+    const prompt = this.extractAskPrompt(ctx);
+    if (!prompt) {
+      await ctx.reply("Usage: /ask <your prompt>");
+      return;
+    }
+
+    await this.processPrompt(ctx, chatId, prompt);
+  }
+
   private makeInlineId(input: string): string {
     let hash = 0;
     for (let i = 0; i < input.length; i += 1) {
       hash = (hash << 5) - hash + input.charCodeAt(i);
       hash |= 0;
     }
-    return `r-${Math.abs(hash).toString(36)}`;
+    return `q-${Math.abs(hash).toString(36)}`;
   }
 
   private makeInlineResult(params: {
@@ -103,14 +126,6 @@ export class TelegramUpdateHandler {
     };
   }
 
-  private pruneInlineCache(now: number): void {
-    for (const [key, entry] of this.inlineCache) {
-      if (entry.expiresAt <= now) {
-        this.inlineCache.delete(key);
-      }
-    }
-  }
-
   @On("inline_query")
   async onInlineQuery(@Ctx() ctx: Context): Promise<void> {
     const inlineQuery = ctx.inlineQuery;
@@ -119,22 +134,20 @@ export class TelegramUpdateHandler {
     }
 
     const userId = inlineQuery.from.id;
-    const query = inlineQuery.query.trim();
+    const query = inlineQuery.query.trim().replace(/\s+/g, " ");
     const now = Date.now();
-
-    this.pruneInlineCache(now);
 
     if (query.length < TelegramUpdateHandler.INLINE_MIN_QUERY_LENGTH) {
       await ctx.answerInlineQuery(
         [
           this.makeInlineResult({
-            id: `short-${userId}`,
-            title: "Type a longer prompt",
-            description: "Use at least 6 characters for inline generation.",
-            messageText: "Please type a longer prompt (at least 6 characters).",
+            id: `hint-${userId}`,
+            title: "Type your prompt",
+            description: "Example: @ItsZaraBot write a caption",
+            messageText: "Type your prompt after the bot username.",
           }),
         ],
-        { cache_time: 2, is_personal: true },
+        { cache_time: 1, is_personal: true },
       );
       return;
     }
@@ -144,110 +157,34 @@ export class TelegramUpdateHandler {
       await ctx.answerInlineQuery(
         [
           this.makeInlineResult({
-            id: `cooldown-${userId}`,
+            id: `wait-${userId}`,
             title: "Please wait",
-            description: "Inline requests are rate-limited.",
-            messageText: "You are sending requests too quickly. Please wait a moment.",
+            description: "Inline request rate limit active.",
+            messageText: "Please wait a second and try again.",
           }),
         ],
-        { cache_time: 2, is_personal: true },
-      );
-      return;
-    }
-
-    const cacheKey = `${userId}:${query.toLowerCase()}`;
-    const cached = this.inlineCache.get(cacheKey);
-    if (cached && cached.expiresAt > now) {
-      await ctx.answerInlineQuery(
-        [
-          this.makeInlineResult({
-            id: this.makeInlineId(cacheKey),
-            title: "Inline answer",
-            description: "Cached result",
-            messageText: cached.text,
-          }),
-        ],
-        { cache_time: 5, is_personal: true },
-      );
-      return;
-    }
-
-    if (this.inlineInFlightUsers.has(userId)) {
-      await ctx.answerInlineQuery(
-        [
-          this.makeInlineResult({
-            id: `busy-${userId}`,
-            title: "Still generating",
-            description: "Previous inline request is in progress.",
-            messageText: "Still generating previous request. Please retry in a second.",
-          }),
-        ],
-        { cache_time: 2, is_personal: true },
+        { cache_time: 1, is_personal: true },
       );
       return;
     }
 
     this.inlineLastRequestAt.set(userId, now);
-    this.inlineInFlightUsers.add(userId);
 
-    try {
-      const output = await Promise.race([
-        this.gemini.generateInline(query),
-        new Promise<string>((_, reject) => {
-          setTimeout(() => reject(new Error("Inline request timed out")), TelegramUpdateHandler.INLINE_TIMEOUT_MS);
+    const commandText = `/ask ${query}`.slice(0, 3800);
+    await ctx.answerInlineQuery(
+      [
+        this.makeInlineResult({
+          id: this.makeInlineId(`${userId}:${query}`),
+          title: "Send query to Zara",
+          description: "Sends /ask and Zara replies in the chat",
+          messageText: commandText,
         }),
-      ]);
-
-      const finalText = output.slice(0, 900);
-      this.inlineCache.set(cacheKey, {
-        text: finalText,
-        expiresAt: now + TelegramUpdateHandler.INLINE_CACHE_TTL_MS,
-      });
-
-      await ctx.answerInlineQuery(
-        [
-          this.makeInlineResult({
-            id: this.makeInlineId(cacheKey),
-            title: "Inline answer",
-            description: "Generated with Gemini",
-            messageText: finalText,
-          }),
-        ],
-        { cache_time: 5, is_personal: true },
-      );
-    } catch (error) {
-      this.logger.warn(`Inline generation failed for user ${userId}: ${(error as Error).message}`);
-      await ctx.answerInlineQuery(
-        [
-          this.makeInlineResult({
-            id: `fallback-${userId}`,
-            title: "Open bot chat",
-            description: "Inline generation is temporarily unavailable.",
-            messageText: "Inline generation is temporarily unavailable. Open the bot chat for full responses.",
-          }),
-        ],
-        { cache_time: 3, is_personal: true },
-      );
-    } finally {
-      this.inlineInFlightUsers.delete(userId);
-    }
+      ],
+      { cache_time: 1, is_personal: true },
+    );
   }
 
-  @On("text")
-  async onMessage(@Ctx() ctx: Context): Promise<void> {
-    const chatId = ctx.chat?.id;
-    const message = ctx.message;
-
-    if (!chatId || !message || !("text" in message)) {
-      return;
-    }
-
-    const text = message.text.trim();
-
-    if (text.startsWith("/")) {
-      return;
-    }
-
+  private async processPrompt(ctx: Context, chatId: number, prompt: string): Promise<void> {
     const now = Date.now();
     const lastAt = this.lastRequestAt.get(chatId) || 0;
     if (now - lastAt < TelegramUpdateHandler.CHAT_COOLDOWN_MS) {
@@ -265,7 +202,7 @@ export class TelegramUpdateHandler {
 
     try {
       await ctx.sendChatAction("typing");
-      const output = await this.gemini.generate(chatId, text);
+      const output = await this.gemini.generate(chatId, prompt);
       await ctx.reply(toTelegramHtml(output), { parse_mode: "HTML" });
     } catch (error) {
       const messageText = (error as Error).message || "Unknown error";
@@ -279,5 +216,22 @@ export class TelegramUpdateHandler {
     } finally {
       this.inFlightChats.delete(chatId);
     }
+  }
+
+  @On("text")
+  async onMessage(@Ctx() ctx: Context): Promise<void> {
+    const chatId = ctx.chat?.id;
+    const message = ctx.message;
+
+    if (!chatId || !message || !("text" in message)) {
+      return;
+    }
+
+    const text = message.text.trim();
+    if (text.startsWith("/")) {
+      return;
+    }
+
+    await this.processPrompt(ctx, chatId, text);
   }
 }
