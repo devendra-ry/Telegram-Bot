@@ -149,7 +149,8 @@ export class TelegramUpdateHandler {
       return;
     }
 
-    const commandText = `/ask ${query}`.slice(0, 3800);
+    const botUsername = ctx.me || "ItsZaraBot";
+    const commandText = `/ask@${botUsername} ${query}`.slice(0, 3800);
     await ctx.answerInlineQuery(
       [
         this.makeInlineResult({
