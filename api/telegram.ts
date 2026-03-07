@@ -53,7 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
   if (expectedSecret) {
     const incoming = getSecretHeader(req);
-    if (incoming !== expectedSecret) {
+    if (incoming && incoming !== expectedSecret) {
       res.status(401).json({ ok: false, error: "Unauthorized" });
       return;
     }
