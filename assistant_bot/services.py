@@ -18,7 +18,7 @@ def _trim_history(chat_id: int) -> None:
 
 
 def _build_prompt(chat_id: int) -> str:
-    lines = ["You are a concise and helpful assistant."]
+    lines = ["You are a concise and helpful assistant. Use plain text or Telegram-compatible HTML tags (<b>, <i>, <code>, <pre>) for formatting. Do not use Markdown syntax like **bold**."]
     for message in conversation_history[chat_id]:
         role = message.get("role", "user")
         content = message.get("content", "")
@@ -157,3 +157,4 @@ async def send_message_draft(
     except Exception as exc:
         logger.warning("sendMessageDraft request failed: %s", exc)
         return False
+

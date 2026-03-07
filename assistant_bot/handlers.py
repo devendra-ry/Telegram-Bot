@@ -1,12 +1,21 @@
-import random
+import html
+import re
 import time
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from assistant_bot.config import logger
-from assistant_bot.services import get_ai_response_with_stream, send_message_draft
+from assistant_bot.services import get_ai_response_with_stream
 from assistant_bot.state import conversation_history
+
+
+def _to_telegram_html(text: str) -> str:
+    """Escape text for HTML parse mode and convert common markdown bold/code."""
+    escaped = html.escape(text or "", quote=False)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped, flags=re.DOTALL)
+    escaped = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", escaped)
+    return escaped
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -45,30 +54,21 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming text messages with streamed Gemini responses."""
+    """Handle incoming text messages by editing a single response message while streaming."""
     chat_id = update.effective_chat.id
     user_message = update.message.text
 
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
-    effective_message = update.effective_message
-    chat_type = update.effective_chat.type if update.effective_chat else ""
-    use_draft_stream = chat_type == "private"
-    draft_enabled = True
-
-    draft_id = (
-        effective_message.message_id
-        if effective_message and effective_message.message_id
-        else random.randint(1, 2_147_483_647)
-    )
-    message_thread_id = getattr(effective_message, "message_thread_id", None)
+    response_message = await update.message.reply_text("Thinking...")
     last_sent_len = 0
     last_sent_at = 0.0
+    edit_failed = False
 
     async def on_partial(partial_text: str) -> None:
-        nonlocal draft_enabled, last_sent_len, last_sent_at
+        nonlocal last_sent_len, last_sent_at, edit_failed
 
-        if not use_draft_stream or not draft_enabled:
+        if edit_failed:
             return
 
         text = partial_text.strip()
@@ -79,20 +79,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if len(text) - last_sent_len < 24 and (now - last_sent_at) < 0.8:
             return
 
-        ok = await send_message_draft(
-            chat_id=chat_id,
-            draft_id=draft_id,
-            text=text,
-            message_thread_id=message_thread_id,
-        )
-        if ok:
+        try:
+            await response_message.edit_text(text[:4096])
             last_sent_len = len(text)
             last_sent_at = now
-        else:
-            draft_enabled = False
+        except Exception as exc:
+            if "message is not modified" in str(exc).lower():
+                return
+            logger.warning("Streaming edit failed: %s", exc)
+            edit_failed = True
 
     response = await get_ai_response_with_stream(chat_id, user_message, on_partial=on_partial)
-    await update.message.reply_text(response)
+    final_text_raw = (response or "I could not generate a response. Please try again.")[:4096]
+    final_text_html = _to_telegram_html(final_text_raw)
+
+    try:
+        await response_message.edit_text(final_text_html, parse_mode="HTML")
+    except Exception as exc:
+        if "message is not modified" not in str(exc).lower():
+            logger.warning("Final edit failed: %s", exc)
+            await update.message.reply_text(final_text_raw)
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
