@@ -10,12 +10,25 @@ from assistant_bot.services import get_ai_response_with_stream
 from assistant_bot.state import conversation_history
 
 
+_ALLOWED_HTML_TAGS = ("b", "strong", "i", "em", "u", "s", "code", "pre")
+
+
+def _restore_allowed_html_tags(escaped_text: str) -> str:
+    restored = escaped_text
+    for tag in _ALLOWED_HTML_TAGS:
+        restored = re.sub(fr"&lt;{tag}&gt;", f"<{tag}>", restored, flags=re.IGNORECASE)
+        restored = re.sub(fr"&lt;/{tag}&gt;", f"</{tag}>", restored, flags=re.IGNORECASE)
+
+    restored = re.sub(r"&lt;br\s*/?&gt;", "<br>", restored, flags=re.IGNORECASE)
+    return restored
+
+
 def _to_telegram_html(text: str) -> str:
-    """Escape text for HTML parse mode and convert common markdown bold/code."""
+    """Escape text for HTML parse mode and allow a safe subset of formatting tags."""
     escaped = html.escape(text or "", quote=False)
     escaped = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped, flags=re.DOTALL)
     escaped = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", escaped)
-    return escaped
+    return _restore_allowed_html_tags(escaped)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
