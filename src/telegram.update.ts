@@ -14,16 +14,22 @@ type InlineArticleResult = {
   };
 };
 
-function escapeHtml(input: string): string {
-  return input
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
 function toTelegramHtml(text: string): string {
-  const escaped = escapeHtml(text);
-  return escaped
+  // First cleanly escape unescaped ampersands
+  let result = text.replace(/&(?!amp;|lt;|gt;|quot;|#\d+;)/g, "&amp;");
+  
+  // Then preserve valid Telegram HTML tags, while escaping raw < and >
+  result = result.replace(
+    /<(\/?)(b|strong|i|em|u|ins|s|strike|del|code|pre|a|tg-spoiler)(?:\s+[^>]*)?>|(<)|(>)/gi,
+    (match, slash, tag, open, close) => {
+      if (open) return "&lt;";
+      if (close) return "&gt;";
+      return match;
+    }
+  );
+
+  // Still preserve this replacement in case there is some stray "**" bold generated
+  return result
     .replace(/\*\*(.+?)\*\*/gs, "<b>$1</b>")
     .replace(/`([^`\n]+)`/g, "<code>$1</code>");
 }
