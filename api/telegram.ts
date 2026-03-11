@@ -53,20 +53,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   }
 
   const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
-  if (expectedSecret) {
-    const incoming = getSecretHeader(req);
-    if (!incoming) {
-      res.status(401).json({ ok: false, error: "Unauthorized" });
-      return;
-    }
+  if (!expectedSecret) {
+    console.error("TELEGRAM_WEBHOOK_SECRET is not set");
+    res.status(500).json({ ok: false, error: "Server configuration error" });
+    return;
+  }
 
-    const expectedBuffer = Buffer.from(expectedSecret);
-    const incomingBuffer = Buffer.from(incoming);
+  const incoming = getSecretHeader(req);
+  if (!incoming) {
+    res.status(401).json({ ok: false, error: "Unauthorized" });
+    return;
+  }
 
-    if (expectedBuffer.length !== incomingBuffer.length || !crypto.timingSafeEqual(expectedBuffer, incomingBuffer)) {
-      res.status(401).json({ ok: false, error: "Unauthorized" });
-      return;
-    }
+  const expectedBuffer = Buffer.from(expectedSecret);
+  const incomingBuffer = Buffer.from(incoming);
+
+  if (expectedBuffer.length !== incomingBuffer.length || !crypto.timingSafeEqual(expectedBuffer, incomingBuffer)) {
+    res.status(401).json({ ok: false, error: "Unauthorized" });
+    return;
   }
 
   const update = parseUpdate(req.body);
