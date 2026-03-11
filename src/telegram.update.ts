@@ -34,6 +34,34 @@ function toTelegramHtml(text: string): string {
     .replace(/`([^`\n]+)`/g, "<code>$1</code>");
 }
 
+function closeUnclosedTags(html: string): string {
+  const stack: string[] = [];
+  const regex = /<(\/?)(b|strong|i|em|u|ins|s|strike|del|code|pre|a|tg-spoiler)(?:\s+[^>]*)?>/gi;
+  let match;
+
+  while ((match = regex.exec(html)) !== null) {
+    const isClosing = match[1] === "/";
+    const tag = match[2].toLowerCase();
+
+    if (!isClosing) {
+      stack.push(tag);
+    } else {
+      // Find the last open tag and pop it off if it matches
+      const index = stack.lastIndexOf(tag);
+      if (index !== -1) {
+        stack.splice(index, 1);
+      }
+    }
+  }
+
+  // Close remaining unclosed tags
+  let closedHtml = html;
+  for (let i = stack.length - 1; i >= 0; i--) {
+    closedHtml += `</${stack[i]}>`;
+  }
+  return closedHtml;
+}
+
 @Injectable()
 @Update()
 export class TelegramUpdateHandler {
@@ -188,8 +216,38 @@ export class TelegramUpdateHandler {
 
     try {
       await ctx.sendChatAction("typing");
-      const output = await this.gemini.generate(chatId, prompt);
-      await ctx.reply(toTelegramHtml(output), { parse_mode: "HTML" });
+      
+      const replyMsg = await ctx.reply("...");
+      const messageId = replyMsg.message_id;
+
+      let fullText = "";
+      let lastEditTime = Date.now();
+      const EDIT_INTERVAL_MS = 1500;
+
+      const stream = this.gemini.generateStream(chatId, prompt);
+      for await (const chunk of stream) {
+        fullText += chunk;
+        const nowMs = Date.now();
+
+        if (nowMs - lastEditTime > EDIT_INTERVAL_MS) {
+          lastEditTime = nowMs;
+          const safeHtml = closeUnclosedTags(toTelegramHtml(fullText));
+          try {
+            await ctx.telegram.editMessageText(chatId, messageId, undefined, safeHtml, { parse_mode: "HTML" });
+          } catch (editError) {
+             // Ignore "message is not modified" or parsing issues during partial chunks
+          }
+        }
+      }
+
+      // Final edit to ensure the complete message is visible
+      const finalHtml = closeUnclosedTags(toTelegramHtml(fullText));
+      try {
+        await ctx.telegram.editMessageText(chatId, messageId, undefined, finalHtml, { parse_mode: "HTML" });
+      } catch (finalEditError) {
+        // Only fails if the final text is identical to the last chunk edit
+      }
+
     } catch (error) {
       const messageText = (error as Error).message || "Unknown error";
       this.logger.error(`Failed to generate response for chat ${chatId}: ${messageText}`);

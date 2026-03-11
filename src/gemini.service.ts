@@ -76,16 +76,78 @@ export class GeminiService {
     );
   }
 
-  async generate(chatId: number, userMessage: string): Promise<string> {
+  async *generateStream(chatId: number, userMessage: string): AsyncGenerator<string, void, unknown> {
     const { maxHistory } = this.appConfig.config;
-
+    // Push the user message first
     this.state.append(chatId, { role: "user", content: userMessage }, maxHistory);
-
     const prompt = this.buildPrompt(chatId);
-    const output = await this.requestGemini(prompt);
 
-    this.state.append(chatId, { role: "assistant", content: output }, maxHistory);
-    return output;
+    const { geminiApiKey, geminiModel } = this.appConfig.config;
+    if (!geminiApiKey) {
+      throw new Error("GEMINI_API_KEY is required");
+    }
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(geminiApiKey)}`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.6 },
+      }),
+    });
+
+    if (!response.ok) {
+      const raw = await response.text();
+      throw new Error(`Gemini stream failed (${response.status}): ${raw.slice(0, 300)}`);
+    }
+
+    if (!response.body) {
+      throw new Error("Response body is null");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let fullOutput = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const dataStr = line.slice(6).trim();
+            if (!dataStr) continue;
+
+            try {
+              const data = JSON.parse(dataStr) as GeminiResponse;
+              const textChunk = data.candidates?.[0]?.content?.parts
+                ?.map((p) => p.text || "")
+                .join("") || "";
+
+              if (textChunk) {
+                fullOutput += textChunk;
+                yield textChunk;
+              }
+            } catch (e) {
+              // Ignore parse errors for incomplete chunks just in case
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+      
+      const finalOutput = fullOutput.trim() || "I could not generate a response.";
+      this.state.append(chatId, { role: "assistant", content: finalOutput }, maxHistory);
+    }
   }
 
   async generateInline(query: string): Promise<string> {
