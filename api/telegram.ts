@@ -1,6 +1,7 @@
 import type { INestApplicationContext } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import crypto from "node:crypto";
 import "reflect-metadata";
 import type { Update } from "telegraf/types";
 import { AppModule } from "../src/app.module.js";
@@ -54,7 +55,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
   if (expectedSecret) {
     const incoming = getSecretHeader(req);
-    if (incoming && incoming !== expectedSecret) {
+    if (!incoming) {
+      res.status(401).json({ ok: false, error: "Unauthorized" });
+      return;
+    }
+
+    const expectedBuffer = Buffer.from(expectedSecret);
+    const incomingBuffer = Buffer.from(incoming);
+
+    if (expectedBuffer.length !== incomingBuffer.length || !crypto.timingSafeEqual(expectedBuffer, incomingBuffer)) {
       res.status(401).json({ ok: false, error: "Unauthorized" });
       return;
     }
