@@ -105,15 +105,18 @@ export class TelegramUpdateHandler {
     await ctx.reply("pong");
   }
 
-  private extractAskPrompt(ctx: Context): string {
+  private extractAskPrompt(ctx: Context): string | null {
     const message = ctx.message;
     if (!message || !("text" in message)) {
-      return "";
+      return null;
     }
 
     const text = message.text.trim();
     const match = text.match(/^\/ask(?:@\w+)?\s*([\s\S]*)$/i);
-    return (match?.[1] || "").trim();
+    if (!match) {
+      return null;
+    }
+    return (match[1] || "").trim();
   }
 
   @Command("ask")
@@ -298,18 +301,17 @@ export class TelegramUpdateHandler {
       return;
     }
 
-    const text = message.text.trim();
-    const askMatch = text.match(/^\/ask(?:@\w+)?\s*([\s\S]*)$/i);
-    if (askMatch) {
-      const prompt = (askMatch[1] || "").trim();
-      if (!prompt) {
+    const askPrompt = this.extractAskPrompt(ctx);
+    if (askPrompt !== null) {
+      if (!askPrompt) {
         await ctx.reply("Usage: /ask <your prompt>");
         return;
       }
-      await this.processPrompt(ctx, chatId, prompt);
+      await this.processPrompt(ctx, chatId, askPrompt);
       return;
     }
 
+    const text = message.text.trim();
     if (text.startsWith("/")) {
       return;
     }
