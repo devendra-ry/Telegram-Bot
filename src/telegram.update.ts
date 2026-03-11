@@ -217,21 +217,44 @@ export class TelegramUpdateHandler {
     try {
       await ctx.sendChatAction("typing");
       
-      const replyMsg = await ctx.reply("...");
-      const messageId = replyMsg.message_id;
-
       let fullText = "";
       let lastEditTime = Date.now();
-      const EDIT_INTERVAL_MS = 1500;
+      const EDIT_INTERVAL_MS = 1000;
+      let streamId: string | null = null;
+      let messageId: number | null = null;
 
       const stream = this.gemini.generateStream(chatId, prompt);
       for await (const chunk of stream) {
         fullText += chunk;
         const nowMs = Date.now();
 
-        if (nowMs - lastEditTime > EDIT_INTERVAL_MS) {
+        const safeHtml = closeUnclosedTags(toTelegramHtml(fullText));
+
+        if (!streamId && !messageId) {
+           // Establish stream natively on telegram api 
+           try {
+             const payload = {
+                chat_id: chatId,
+                text: safeHtml,
+                parse_mode: "HTML",
+                // Enable streaming on the message natively
+                reply_markup: {
+                  is_streaming: true
+                }
+             } as any;
+
+             // We use native callApi because telegraf types might not have it yet fully mapped
+             const response = await ctx.telegram.callApi("sendMessage", payload) as any; // Cast since types might lag behind 9.5 officially
+             messageId = response.message_id;
+           } catch (e: any) {
+              // fallback if the lib/API completely refuses `is_streaming` structure
+              console.error("Native streaming unsupported structure fallback", e);
+              const fallbackMsg = await ctx.reply(safeHtml, { parse_mode: "HTML" });
+              messageId = fallbackMsg.message_id;
+           }
+           lastEditTime = nowMs;
+        } else if (messageId && nowMs - lastEditTime > EDIT_INTERVAL_MS) {
           lastEditTime = nowMs;
-          const safeHtml = closeUnclosedTags(toTelegramHtml(fullText));
           try {
             await ctx.telegram.editMessageText(chatId, messageId, undefined, safeHtml, { parse_mode: "HTML" });
           } catch (editError) {
@@ -240,12 +263,16 @@ export class TelegramUpdateHandler {
         }
       }
 
-      // Final edit to ensure the complete message is visible
+      // Final edit to ensure the complete message is visible and cap the string natively
       const finalHtml = closeUnclosedTags(toTelegramHtml(fullText));
-      try {
-        await ctx.telegram.editMessageText(chatId, messageId, undefined, finalHtml, { parse_mode: "HTML" });
-      } catch (finalEditError) {
-        // Only fails if the final text is identical to the last chunk edit
+      if (messageId) {
+        try {
+          await ctx.telegram.editMessageText(chatId, messageId, undefined, finalHtml, { parse_mode: "HTML" });
+        } catch (finalEditError) {
+          // Only fails if the final text is identical to the last chunk edit
+        }
+      } else {
+         await ctx.reply(finalHtml, { parse_mode: "HTML" });
       }
 
     } catch (error) {
