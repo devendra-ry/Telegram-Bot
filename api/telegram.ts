@@ -52,12 +52,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   }
 
   const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
-  if (expectedSecret) {
-    const incoming = getSecretHeader(req);
-    if (incoming && incoming !== expectedSecret) {
-      res.status(401).json({ ok: false, error: "Unauthorized" });
-      return;
-    }
+  if (!expectedSecret) {
+    console.error("TELEGRAM_WEBHOOK_SECRET is not set");
+    res.status(500).json({ ok: false, error: "Server configuration error" });
+    return;
+  }
+
+  const incoming = getSecretHeader(req);
+  if (incoming !== expectedSecret) {
+    res.status(401).json({ ok: false, error: "Unauthorized" });
+    return;
   }
 
   const update = parseUpdate(req.body);
