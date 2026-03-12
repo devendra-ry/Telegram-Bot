@@ -45,13 +45,19 @@ function parseUpdate(body: unknown): Update | null {
   }
 }
 
+let cachedSecret: string | undefined;
+
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (req.method !== "POST") {
     res.status(405).json({ ok: false, error: "Method not allowed" });
     return;
   }
 
-  const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
+  if (cachedSecret === undefined) {
+    cachedSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
+  }
+
+  const expectedSecret = cachedSecret;
   if (expectedSecret) {
     const incoming = getSecretHeader(req);
     if (incoming && incoming !== expectedSecret) {
