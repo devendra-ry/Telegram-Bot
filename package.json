@@ -13,6 +13,7 @@
   "devDependencies": {
     "@types/node": "^22.13.9",
     "@vercel/node": "^5.3.24",
+    "minimatch": "^10.2.4",
     "typescript": "^5.8.2"
   },
   "dependencies": {
